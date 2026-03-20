@@ -23,7 +23,7 @@ class PriceLevel:
     left: PriceLevel | None
     right: PriceLevel | None
 
-    def __init__(self, price: float, orders: Queue = deque[Queue], volume: float = 0.0):
+    def __init__(self, price: float, orders: Queue = Queue, volume: float = 0.0):
         self.price = price
         self.orders = orders
         self.volume = volume
