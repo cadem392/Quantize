@@ -25,7 +25,7 @@ class OrderBook:
     def add_limit_order(self, order: Order) -> None:
         """Add limit order to book in either bids or asks."""
 
-        if order.side = 'buy':
+        if order.side == 'buy':
             self.bids.insert(order)
         else:
             self.asks.insert(order)
