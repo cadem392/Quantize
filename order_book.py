@@ -61,3 +61,13 @@ class OrderBook:
         """Returns depth snapshot up to a certain depth (levels)."""
 
         raise NotImplementedError()
+
+    def log_trade(self, record: dict) -> None:
+        """Log trade."""
+
+        raise NotImplementedError()
+
+    def flush_log(self, path: str) -> None:
+        """Flush log."""
+
+        raise NotImplementedError()
