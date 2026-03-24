@@ -20,8 +20,6 @@ Sahand Samadirand
 """
 from __future__ import annotations
 
-from collections import deque
-from queue import Queue
 from orders import Order
 
 
