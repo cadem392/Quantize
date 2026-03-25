@@ -21,7 +21,6 @@ Sahand Samadirand
 from __future__ import annotations
 
 from collections import deque
-from queue import Queue
 from orders import Order
 
 
@@ -38,7 +37,6 @@ class _Node:
         self.item = item
         self.prev = None
         self.next = None
-
 
 class Queue:
     """FIFO queue for ``PriceLevel.orders``: head dequeue, tail enqueue, dict for id lookup."""
