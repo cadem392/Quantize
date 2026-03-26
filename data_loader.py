@@ -16,6 +16,7 @@ import numpy as np
 import csv
 from datetime import datetime, timedelta
 
+
 class DataLoader:
     """Load, validate, and generate collections of Event objects.
 
