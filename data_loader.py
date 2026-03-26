@@ -304,6 +304,35 @@ class DataLoader:
             feature_matrix.append(features)
 
         return np.array(feature_matrix, dtype=float)
+    
+    
+    def to_label_vector(self) -> np.ndarray:
+        """Convert this loader's events into a NumPy label vector.
+        Each label encodes the target action associated with one event or one derived
+        training example, using the project's action-mapping convention for the neural
+        network (for example, buy, sell, or hold).
 
+        Preconditions:
+        - self.events != []
+        - every event in self.events has enough information to determine a target label
+        """
+        if self.events == []:
+            raise ValueError("No events to convert to a label vector.")
+
+        labels = []
+
+        for event in self.events:
+            if event.order_type == 'cancel':
+                label = 2
+            elif event.side == 'buy':
+                label = 0
+            elif event.side == 'sell':
+                label = 1
+            else:
+                raise ValueError(f"Cannot derive a label from event side: {event.side}")
+
+            labels.append(label)
+
+        return np.array(labels, dtype=int)
 
                 
