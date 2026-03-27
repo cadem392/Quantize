@@ -92,6 +92,7 @@ class MatchingEngine:
 
         if incoming.side == "buy":
             best_ask = self.book.best_ask()
+            expected_price = best_ask.price if best_ask is not None else incoming.price
 
             while (
                     not incoming.is_complete()
@@ -104,6 +105,7 @@ class MatchingEngine:
                 best_ask = self.book.best_ask()
         else:
             best_bid = self.book.best_bid()
+            expected_price = best_bid.price if best_bid is not None else incoming.price
 
             while (
                     not incoming.is_complete()
@@ -128,6 +130,7 @@ class MatchingEngine:
         if fills != []:
             self.metrics["total_slippage"] += self._calc_slippage(incoming.price, fills)
 
+        self.metrics["total_slippage"] += self._calc_slippage(expected_price, fills)
         return fills
 
     def _process_market(self, event: Event) -> list[dict]:

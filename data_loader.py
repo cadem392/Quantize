@@ -286,7 +286,7 @@ class DataLoader:
         Preconditions:
         - self.events != []
         """
-        if self.events == []:
+        if not self.events:
             raise ValueError("No events to convert to feature matrix.")
 
         side_mapping = {'buy': 1.0, 'sell': 0.0}
@@ -320,7 +320,7 @@ class DataLoader:
         - self.events != []
         - every event in self.events has enough information to determine a target label
         """
-        if self.events == []:
+        if not self.events:
             raise ValueError("No events to convert to a label vector.")
 
         labels = []

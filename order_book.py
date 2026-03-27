@@ -77,7 +77,9 @@ class OrderBook:
         cancellation succeeded.
         """
 
-        if order_id not in self.order_index:
+        if order_id in self.order_index:
+            order = self.order_index[order_id]
+            order.cancel()
             return False
 
         order = self.order_index[order_id]
@@ -145,19 +147,15 @@ class OrderBook:
         ``(price, volume)`` tuples suitable for charts and API responses.
         """
 
-        if self.bids.root is None:
-            bid_levels = []
-        else:
-            bid_levels = list(reversed(self.bids.root.depth_snapshot(len(self.bids))))[:levels]
+        bid_nodes = self.bids.inorder()
+        ask_nodes = self.asks.inorder()
 
-        if self.asks.root is None:
-            ask_levels = []
-        else:
-            ask_levels = self.asks.root.depth_snapshot(levels)
+        bid_levels = [(node.price, node.volume) for node in reversed(bid_nodes[:])]
+        ask_levels = [(node.price, node.volume) for node in ask_nodes]
 
         return {
-            "bids": bid_levels,
-            "asks": ask_levels
+            "bids": bid_levels[:levels],
+            "asks": ask_levels[:levels]
         }
 
     def log_trade(self, record: dict) -> None:
