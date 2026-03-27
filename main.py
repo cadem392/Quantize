@@ -32,6 +32,7 @@ import os
 
 import numpy as np
 import torch
+from flask import Flask
 from torch.utils.data import DataLoader as TorchDataLoader, TensorDataset
 
 from data_loader import DataLoader
@@ -211,12 +212,14 @@ def train_model(data_path: str) -> None:
     trainer.save("model.pt")
 
 
-def start_flask(app, port: int) -> None:
+def start_flask(app: Flask, port: int) -> None:
     """Start the Quantyze Flask application on the given port.
 
     This function is responsible only for launching the API or UI server layer
     after the core system has been initialized.
     """
+
+    app.run(host='127.0.0.1', port=port, debug=False)
 
 
 def print_summary(engine: MatchingEngine, agent: Agent | None) -> None:

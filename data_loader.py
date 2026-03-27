@@ -82,7 +82,7 @@ class DataLoader:
         return self.events
 
     @staticmethod
-    def _row_to_event(self, row: dict) -> Event:
+    def _row_to_event(row: dict) -> Event:
         """Convert a single CSV row dictionary into an Event object.
 
         Preconditions:
@@ -112,7 +112,9 @@ class DataLoader:
         except ValueError as e:
             raise ValueError(f"Invalid data format: {e}")
 
-        return Event(timestamp, order_id, side, order_type, price, quantity)
+        event = Event(timestamp, order_id, side, order_type, price, quantity)
+        event.validate()
+        return event
 
     def generate_synthetic(self, scenario: str, n: int = 1000) -> list[Event]:
         """Generate and store n synthetic events for the given market scenario.
@@ -133,7 +135,7 @@ class DataLoader:
         return self.events
 
     @staticmethod
-    def _balanced_flow(self, n: int) -> list[Event]:
+    def _balanced_flow(n: int) -> list[Event]:
         """Return n synthetic limit-order events with balanced buy and sell flow.
 
         Preconditions:
@@ -162,7 +164,7 @@ class DataLoader:
         return synthetic_events
 
     @staticmethod
-    def _low_liquidity(self, n: int) -> list[Event]:
+    def _low_liquidity(n: int) -> list[Event]:
         """Return n synthetic events representing a thin market with a wide spread.
 
         Preconditions:
@@ -191,7 +193,7 @@ class DataLoader:
         return synthetic_events
 
     @staticmethod
-    def _high_volatility(self, n: int) -> list[Event]:
+    def _high_volatility(n: int) -> list[Event]:
         """Return n synthetic events with rapidly changing prices and order types.
 
         Preconditions:
@@ -243,7 +245,7 @@ class DataLoader:
         previous_timestamp = None
 
         for event in self.events:
-            if not isinstance(event, Event): # Check if event is an instance of Event
+            if not isinstance(event, Event):  # Check if event is an instance of Event
                 errors.append(f"Invalid event type: {event} instead of Event.")
             else:
                 if not isinstance(event.order_id, str) or event.order_id.strip() == '':
@@ -277,7 +279,7 @@ class DataLoader:
         Each row has the form:
         [timestamp, side, order_type, price, quantity]
 
-        where side is encoded as 1.0 for buy and 0.0 for sell, and
+        where side is encoded as 1.0 for buy and 0.0 for sale, and
         order_type is encoded as 0.0 for limit, 1.0 for market, and
         2.0 for cancel. If an event price is None, it is represented as 0.0.
 
@@ -336,5 +338,3 @@ class DataLoader:
             labels.append(label)
 
         return np.array(labels, dtype=int)
-
-

@@ -80,26 +80,37 @@ class OrderBook:
         if order_id in self.order_index:
             order = self.order_index[order_id]
             order.cancel()
+            return False
 
-            if order.price in self.bids:
-                self.bids[order.price].pop_order_id(order_id)
+        order = self.order_index[order_id]
 
-                if self.bids[order.price].orders.is_empty():
-                    self.bids.delete(order.price)
+        if order.side == "buy":
+            if order.price not in self.bids:
+                return False
 
-                del self.order_index[order_id]
-                return True
+            removed = self.bids[order.price].pop_order_id(order_id)
+            if removed is None:
+                return False
 
-            elif order.price in self.asks:
-                self.asks[order.price].pop_order_id(order_id)
+            removed.cancel()
 
-                if self.asks[order.price].orders.is_empty():
-                    self.asks.delete(order.price)
+            if self.bids[order.price].is_empty():
+                self.bids.delete(order.price)
+        else:
+            if order.price not in self.asks:
+                return False
 
-                del self.order_index[order_id]
-                return True
+            removed = self.asks[order.price].pop_order_id(order_id)
+            if removed is None:
+                return False
 
-        return False
+            removed.cancel()
+
+            if self.asks[order.price].is_empty():
+                self.asks.delete(order.price)
+
+        self.order_index.pop(order_id, None)
+        return True
 
     def best_bid(self) -> PriceLevel | None:
         """Return the PriceLevel at the best (highest) bid price, or None if empty."""
@@ -121,7 +132,13 @@ class OrderBook:
     def mid_price(self) -> float | None:
         """Return the arithmetic midpoint of best bid and best ask, or None if undefined."""
 
-        return self.spread() / 2 if self.spread() is not None else None
+        best_bid = self.best_bid()
+        best_ask = self.best_ask()
+
+        if best_bid is None or best_ask is None:
+            return None
+
+        return (best_bid.price + best_ask.price) / 2
 
     def depth_snapshot(self, levels: int = 10) -> dict[str, list]:
         """Return a depth-of-book snapshot with up to ``levels`` rows per side.

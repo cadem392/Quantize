@@ -85,6 +85,8 @@ class EventStream:
         Preconditions:
         - self.source is finite
         """
+        self.running = True
+
         for event in self.source:
             if not self.running:
                 break
