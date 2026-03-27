@@ -128,9 +128,8 @@ class MatchingEngine:
             self.book.add_limit_order(Order(resting_event))
 
         if fills != []:
-            self.metrics["total_slippage"] += self._calc_slippage(incoming.price, fills)
+            self.metrics["total_slippage"] += self._calc_slippage(expected_price, fills)
 
-        self.metrics["total_slippage"] += self._calc_slippage(expected_price, fills)
         return fills
 
     def _process_market(self, event: Event) -> list[dict]:
