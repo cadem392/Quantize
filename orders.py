@@ -35,7 +35,7 @@ class Event:
     timestamp: datetime
     order_id: str
     side: str
-    order_type: str 
+    order_type: str
     price: float | None
     quantity: float
 
@@ -76,7 +76,7 @@ class Event:
             raise ValueError("Limit orders must have a price.")
         if self.order_type != 'limit' and self.price is not None:
             raise ValueError("Only limit orders can have a price.")
-        
+
     def __repr__(self) -> str:
         """Return a detailed string representation of this event for debugging.
 
@@ -86,7 +86,6 @@ class Event:
         return (f"Event(timestamp={self.timestamp.isoformat()}, order_id='{self.order_id}', "
                 f"side='{self.side}', order_type='{self.order_type}', "
                 f"price={self.price}, quantity={self.quantity})")
-
 
     def to_dict(self) -> dict:
         """Return this event as a dictionary of serializable field values.
@@ -132,7 +131,6 @@ class Order:
     timestamp: datetime
     status: str
 
-
     def __init__(self, event: Event):
         """Initialize this resting order from a validated limit-order event.
 
@@ -158,7 +156,6 @@ class Order:
                 f"quantity={self.quantity}, remaining_qty={self.remaining_qty}, "
                 f"timestamp={self.timestamp.isoformat()}, status='{self.status}')")
 
-    
     def to_dict(self) -> dict:
         """Return this order as a dictionary of serializable field values.
 
@@ -175,7 +172,6 @@ class Order:
             "status": self.status
         }
 
-
     def fill(self, qty: float) -> float:
         """Apply a fill to this order and update quantity and status accordingly.
 
@@ -187,19 +183,18 @@ class Order:
             raise ValueError("Cannot fill a cancelled order.")
         if self.status == 'filled':
             raise ValueError("Cannot fill an order that is already filled.")
-        
+
         if qty == 0:
             return 0.0
-        
+
         self.remaining_qty -= qty
 
         if self.remaining_qty == 0:
             self.status = 'filled'
         elif self.remaining_qty < self.quantity:
             self.status = 'partially_filled'
-        
+
         return qty
-        
 
     def cancel(self) -> None:
         """Mark this order as cancelled so it is no longer active in the book.
@@ -207,7 +202,7 @@ class Order:
         Preconditions:
         - self.status != 'filled'
         """
-        self.status = 'cancelled'         
+        self.status = 'cancelled'
 
     def is_complete(self) -> bool:
         """Return whether this order is fully filled or cancelled.
@@ -216,6 +211,6 @@ class Order:
         - This Order has been fully initialized.
         """
         return self.status == 'cancelled' or self.remaining_qty == 0
-    
 
-    
+
+

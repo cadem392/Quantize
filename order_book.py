@@ -79,6 +79,7 @@ class OrderBook:
 
         if order_id in self.order_index:
             order = self.order_index[order_id]
+            order.cancel()
 
             if order.price in self.bids:
                 self.bids[order.price].pop_order_id(order_id)
@@ -86,6 +87,7 @@ class OrderBook:
                 if self.bids[order.price].orders.is_empty():
                     self.bids.delete(order.price)
 
+                del self.order_index[order_id]
                 return True
 
             elif order.price in self.asks:
@@ -94,6 +96,7 @@ class OrderBook:
                 if self.asks[order.price].orders.is_empty():
                     self.asks.delete(order.price)
 
+                del self.order_index[order_id]
                 return True
 
         return False
@@ -127,9 +130,15 @@ class OrderBook:
         ``(price, volume)`` tuples suitable for charts and API responses.
         """
 
+        bid_nodes = self.bids.inorder()
+        ask_nodes = self.asks.inorder()
+
+        bid_levels = [(node.price, node.volume) for node in reversed(bid_nodes[:])]
+        ask_levels = [(node.price, node.volume) for node in ask_nodes]
+
         return {
-            "bids": self.bids.root.depth_snapshot(levels),
-            "asks": self.asks.root.depth_snapshot(levels)
+            "bids": bid_levels[:levels],
+            "asks": ask_levels[:levels]
         }
 
     def log_trade(self, record: dict) -> None:

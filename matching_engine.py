@@ -92,6 +92,7 @@ class MatchingEngine:
 
         if incoming.side == "buy":
             best_ask = self.book.best_ask()
+            expected_price = best_ask.price if best_ask is not None else incoming.price
 
             while (
                     not incoming.is_complete()
@@ -104,6 +105,7 @@ class MatchingEngine:
                 best_ask = self.book.best_ask()
         else:
             best_bid = self.book.best_bid()
+            expected_price = best_bid.price if best_bid is not None else incoming.price
 
             while (
                     not incoming.is_complete()
@@ -117,6 +119,7 @@ class MatchingEngine:
         if not incoming.is_complete():
             self.book.add_limit_order(incoming)
 
+        self.metrics["total_slippage"] += self._calc_slippage(expected_price, fills)
         return fills
 
     def _process_market(self, event: Event) -> list[dict]:
@@ -131,6 +134,7 @@ class MatchingEngine:
 
         if incoming.side == "buy":
             best_ask = self.book.best_ask()
+            expected_price = best_ask.price if best_ask is not None else 0.0
 
             while not incoming.is_complete() and best_ask is not None:
                 fills.extend(self._match(incoming, best_ask))
@@ -138,12 +142,14 @@ class MatchingEngine:
                 best_ask = self.book.best_ask()
         else:
             best_bid = self.book.best_bid()
+            expected_price = best_bid.price if best_bid is not None else 0.0
 
             while not incoming.is_complete() and best_bid is not None:
                 fills.extend(self._match(incoming, best_bid))
                 self._clean_empty_levels()
                 best_bid = self.book.best_bid()
 
+        self.metrics["total_slippage"] += self._calc_slippage(expected_price, fills)
         return fills
 
     def _process_cancel(self, event: Event) -> None:
@@ -231,7 +237,7 @@ class MatchingEngine:
             self.book.bids.delete(best_bid.price)
             best_bid = self.book.best_bid()
 
-        while best_bid is not None and best_bid.is_empty():
+        while best_ask is not None and best_ask.is_empty():
             self.book.asks.delete(best_ask.price)
             best_ask = self.book.best_ask()
 

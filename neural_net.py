@@ -22,6 +22,7 @@ Sahand Samadirand
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -82,12 +83,42 @@ class Trainer:
     def train_epoch(self, loader: DataLoader) -> float:
         """One full training pass over ``loader``; return mean batch loss."""
 
-        raise NotImplementedError
+        self.model.train()
+        total_loss = 0.0
+        total_n = 0
+
+        for x, y in loader:
+            x = x.to(self.device).float()
+            y = y.to(self.device).long()
+            self.optimizer.zero_grad()
+            logits = self.model(x)
+            loss = self.criterion(logits, y)
+            loss.backward()
+            self.optimizer.step()
+            bs = x.size(0)
+            total_loss += loss.item() * bs
+            total_n += bs
+
+        return total_loss / max(total_n, 1)
 
     def validate(self, loader: DataLoader) -> float:
         """Eval-mode pass over ``loader``; return mean validation loss."""
 
-        raise NotImplementedError
+        self.model.eval()
+        total_loss = 0.0
+        total_n = 0
+
+        with torch.no_grad():
+            for x, y in loader:
+                x = x.to(self.device).float()
+                y = y.to(self.device).long()
+                logits = self.model(x)
+                loss = self.criterion(logits, y)
+                bs = x.size(0)
+                total_loss += loss.item() * bs
+                total_n += bs
+
+        return total_loss / max(total_n, 1)
 
     def fit(
         self,
@@ -97,17 +128,31 @@ class Trainer:
     ) -> None:
         """Train for ``epochs``; track history and persist the best weights to model.pt."""
 
-        raise NotImplementedError
+        best_val = float("inf")
+
+        for epoch in range(epochs):
+            train_loss = self.train_epoch(train_loader)
+            val_loss = self.validate(val_loader)
+            self.history["train_loss"].append(train_loss)
+            self.history["val_loss"].append(val_loss)
+
+            if val_loss < best_val:
+                best_val = val_loss
+                self.save("model.pt")
+
+            print(f"Epoch {epoch + 1:03d}/{epochs} | train={train_loss:.6f} | val={val_loss:.6f}")
 
     def save(self, path: str = "model.pt") -> None:
         """Serialise ``model.state_dict()`` to ``path``."""
 
-        raise NotImplementedError
+        torch.save(self.model.state_dict(), path)
 
     def load(self, path: str = "model.pt") -> None:
         """Load weights from ``path`` into ``model`` and set eval mode."""
 
-        raise NotImplementedError
+        state = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(state)
+        self.model.eval()
 
 
 class Agent:
@@ -129,20 +174,50 @@ class Agent:
         self.pnl_log = []
         self._model_path = model_path
 
+        if os.path.exists(model_path):
+            state = torch.load(model_path, map_location=torch.device("cpu"))
+            self.model.load_state_dict(state)
+            self.model.eval()
+
     def observe(self, book: OrderBook) -> np.ndarray:
         """Extract the feature vector (spread, depth bands, mid, imbalance, etc.)."""
 
-        raise NotImplementedError
+        return build_features(book)
 
     def act(self, book: OrderBook) -> str:
         """observe -> forward -> argmax -> action_map string."""
 
-        raise NotImplementedError
+        features = self.observe(book)  # (feature_dim,)
+        device = next(self.model.parameters()).device
+        x = torch.from_numpy(features).float().unsqueeze(0).to(device)  # (1, feature_dim)
+        self.model.eval()
+
+        with torch.no_grad():
+            logits = self.model(x)  # (1, 3)
+            cls = int(torch.argmax(logits, dim=1).item())
+
+        return self.action_map[cls]
 
     def step(self, book: OrderBook, fill_price: float) -> dict:
         """Choose action, apply simulated economics, append P&L; return a step record."""
 
-        raise NotImplementedError
+        action = self.act(book)
+        qty = 1.0
+        if action == "buy":
+            self.position += qty
+            self.balance -= qty * fill_price
+        elif action == "sell":
+            self.position -= qty
+            self.balance += qty * fill_price
+        pnl = self.balance + self.position * fill_price
+        self.pnl_log.append(pnl)
+        return {
+            "action": action,
+            "fill_price": float(fill_price),
+            "position": float(self.position),
+            "balance": float(self.balance),
+            "pnl": float(pnl),
+        }
 
     def total_pnl(self) -> float:
         """Sum of ``pnl_log`` entries."""
@@ -153,10 +228,46 @@ class Agent:
 def build_features(book: OrderBook) -> np.ndarray:
     """Standalone 12-D feature vector: best bid/ask, spread, depth[0..4], mid, imbalance."""
 
-    raise NotImplementedError
+    levels = 4
+    snapshot = book.depth_snapshot(levels=levels)
+    bids = snapshot.get("bids", []) or []
+    asks = snapshot.get("asks", []) or []
+
+    def get_price(side, i):
+        """Get price at ``i`` for the correct ``side``."""
+        if i < len(side) and len(side[i]) >= 1:
+            return float(side[i][0])
+        return 0.0
+
+    def get_vol(side, i):
+        """Get volume at ``i`` for the correct ``side``."""
+        if i < len(side) and len(side[i]) >= 2:
+            return float(side[i][1])
+        return 0.0
+
+    best_bid = get_price(bids, 0)
+    best_ask = get_price(asks, 0)
+    if best_bid > 0.0 and best_ask > 0.0:
+        spread = best_ask - best_bid
+        mid = (best_bid + best_ask) / 2.0
+    else:
+        spread = 0.0
+        mid = 0.0
+    features = [
+        best_bid, best_ask, spread, mid,
+        get_vol(bids, 0), get_vol(asks, 0),
+        get_vol(bids, 1), get_vol(asks, 1),
+        get_vol(bids, 2), get_vol(asks, 2),
+        get_vol(bids, 3), get_vol(asks, 3),
+    ]
+    return np.array(features, dtype=np.float32)
 
 
 def load_agent(path: str) -> Agent:
     """Construct Agent and load weights from ``path`` for inference."""
 
-    raise NotImplementedError
+    agent = Agent(model_path=path)
+    state = torch.load(path, map_location=torch.device("cpu"))
+    agent.model.load_state_dict(state)
+    agent.model.eval()
+    return agent
