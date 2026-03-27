@@ -195,16 +195,27 @@ class PriceLevel:
 
         return self.orders.peek_id(order_id)
 
-    def depth_snapshot(self, levels) -> list[tuple[float, float]]:
-        """Return a list of (price, volume) tuples describing each price level until a certain depth."""
+    def depth_snapshot(self, levels: int) -> list[tuple[float, float]]:
+        """Return up to ``levels`` (price, volume) pairs from this subtree.
 
-        if (self.left is None and self.right is None) or levels == 0:
+        The snapshot is returned in ascending price order.
+        """
+
+        if levels <= 0:
             return []
         else:
-            snapshot = [(self.price, self.volume)]
-            if self.left is not None:
-                snapshot.extend(self.left.depth_snapshot(levels - 1))
-            if self.right is not None:
-                snapshot.extend(self.right.depth_snapshot(levels - 1))
+            snapshot = []
 
-            return snapshot
+            if self.left is not None:
+                snapshot.extend(self.left.depth_snapshot(levels))
+                if len(snapshot) >= levels:
+                    return snapshot[:levels]
+
+            snapshot.append((self.price, self.volume))
+            if len(snapshot) >= levels:
+                return snapshot[:levels]
+
+            if self.right is not None:
+                snapshot.extend(self.right.depth_snapshot(levels - len(snapshot)))
+
+            return snapshot[:levels]

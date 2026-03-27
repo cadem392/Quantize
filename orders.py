@@ -3,7 +3,7 @@
 This module contains the core data objects shared across the rest of the
 project:
 - Event, which represents a raw market instruction
-- _BaseOrder, which stores the common executable-order fields
+- BaseOrder, which stores the common executable-order fields
 - IncomingOrder, which represents a mutable order currently being matched
 - Order, which represents a limit order resting in the order book
 
@@ -315,6 +315,10 @@ class Order(BaseOrder):
         Preconditions:
         - self.status != 'filled'
         """
+
+        if self.status == 'filled':
+            raise ValueError
+
         self.status = 'cancelled'
 
     def is_complete(self) -> bool:
