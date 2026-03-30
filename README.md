@@ -71,8 +71,9 @@ future UI layer.
 
 ## ML and Dataset Notes
 
-The current training/data path uses one shared 12-feature schema for both
-training and inference:
+The current training/data path uses one shared 16-feature schema for both
+training and inference. It includes the current level-1 / level-2 snapshot
+plus a short one-step history signal:
 
 1. best bid price
 2. best bid size
@@ -86,14 +87,29 @@ training and inference:
 10. level-2 ask price
 11. level-2 ask size
 12. event-side feature
+13. one-step best bid price delta
+14. one-step best ask price delta
+15. one-step mid-price delta
+16. one-step imbalance delta
 
-Labels use the next-changed-mid rule:
+Labels use a fixed 25-event horizon with a +/- $0.01 move threshold:
 - `0 = buy`
 - `1 = sell`
 - `2 = hold`
 
-`DataLoader.export_training_csv(...)` writes the exact feature rows and labels
-used by the training pipeline to `training_data.csv`.
+More concretely:
+- if the mid-price 25 events later is more than `0.01` above the current mid,
+  the label is `buy`
+- if it is more than `0.01` below the current mid, the label is `sell`
+- otherwise the label is `hold`
+
+The main training pipeline standardizes features using the training split mean
+and standard deviation before fitting the model. The exported
+`training_data.csv` artifact contains those normalized 16-D feature rows
+together with their labels.
+
+Training uses class-weighted cross-entropy so rare classes, especially `hold`,
+contribute more strongly to the loss.
 
 Checkpoint behavior:
 - a valid non-empty checkpoint means the ML agent can be activated
@@ -101,6 +117,10 @@ Checkpoint behavior:
   only"
 - the public loader contract returns `None` when no valid checkpoint is
   available, so simulation can run safely without ML
+
+After training, Quantyze also writes `training_metrics.json`, which stores the
+loss curves, validation accuracy, majority-class baseline, per-class recall,
+prediction counts, and confusion matrix.
 
 ## Useful Commands
 
@@ -144,11 +164,14 @@ message filename by replacing `_message_` with `_orderbook_`.
 
 ## Current Validation
 
-At the moment, the safest lightweight validation command is:
+The current lightweight validation flow is:
 
 ```bash
 python3 -m py_compile *.py
+python3 main.py --no-ui
 ```
 
-That checks syntax across the Python modules without claiming the full system is
-ready to run end-to-end.
+This confirms:
+- Python modules compile cleanly
+- the default synthetic simulation still runs end-to-end
+- a saved checkpoint can be loaded during simulation if `model.pt` is valid
