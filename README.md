@@ -8,6 +8,15 @@ for bids and one for asks, with FIFO order queues at each price.
 
 This repository is currently in active development.
 
+Current backend status:
+- the order book, matching engine, and event replay path compile and run
+- the synthetic `balanced` scenario now targets an active market instead of a
+  completely static non-crossing book
+- the training pipeline can build model-ready datasets, export
+  `training_data.csv`
+- the main training flow now writes both `training_data.csv` and `model.pt`
+- raw LOBSTER message and orderbook files are supported for dataset building
+
 ## Repository Layout
 
 The assignment expects a flat top-level layout. The main source files are:
@@ -60,14 +69,109 @@ This keeps the simulator core limited to clean limit / market / cancel replay
 while still exposing richer real-market metadata for plots, notebooks, or a
 future UI layer.
 
+## ML and Dataset Notes
 
-## Current Validation
+The current training/data path uses one shared 16-feature schema for both
+training and inference. It includes the current level-1 / level-2 snapshot
+plus a short one-step history signal:
 
-At the moment, the safest lightweight validation command is:
+1. best bid price
+2. best bid size
+3. best ask price
+4. best ask size
+5. spread
+6. mid-price
+7. level-1 imbalance
+8. level-2 bid price
+9. level-2 bid size
+10. level-2 ask price
+11. level-2 ask size
+12. event-side feature
+13. one-step best bid price delta
+14. one-step best ask price delta
+15. one-step mid-price delta
+16. one-step imbalance delta
+
+Labels use a fixed 25-event horizon with a +/- $0.01 move threshold:
+- `0 = buy`
+- `1 = sell`
+- `2 = hold`
+
+More concretely:
+- if the mid-price 25 events later is more than `0.01` above the current mid,
+  the label is `buy`
+- if it is more than `0.01` below the current mid, the label is `sell`
+- otherwise the label is `hold`
+
+The main training pipeline standardizes features using the training split mean
+and standard deviation before fitting the model. The exported
+`training_data.csv` artifact contains those normalized 16-D feature rows
+together with their labels.
+
+Training uses class-weighted cross-entropy so rare classes, especially `hold`,
+contribute more strongly to the loss.
+
+Checkpoint behavior:
+- a valid non-empty checkpoint means the ML agent can be activated
+- a missing, empty, or invalid checkpoint should be treated as "simulation
+  only"
+- the public loader contract returns `None` when no valid checkpoint is
+  available, so simulation can run safely without ML
+
+After training, Quantyze also writes `training_metrics.json`, which stores the
+loss curves, validation accuracy, majority-class baseline, per-class recall,
+prediction counts, and confusion matrix.
+
+## Useful Commands
+
+Syntax check:
 
 ```bash
 python3 -m py_compile *.py
 ```
 
-That checks syntax across the Python modules without claiming the full system is
-ready to run end-to-end.
+Run the default synthetic simulation:
+
+```bash
+python3 main.py --no-ui
+```
+
+Train on an internal CSV:
+
+```bash
+python3 main.py --train --data <internal_csv_path>
+```
+
+Train on a raw LOBSTER message file:
+
+```bash
+python3 main.py --train --data <lobster_message_csv>
+```
+
+Export training data manually from Python:
+
+```python
+from data_loader import DataLoader
+
+loader = DataLoader()
+loader.generate_synthetic("balanced", 100)
+loader.export_training_csv("training_data.csv")
+```
+
+For raw LOBSTER training, the paired orderbook file is inferred from the
+message filename by replacing `_message_` with `_orderbook_`.
+
+
+## Current Validation
+
+The current lightweight validation flow is:
+
+```bash
+python3 -m py_compile *.py
+python3 main.py --no-ui
+```
+
+This confirms:
+- Python modules compile cleanly
+- the default synthetic simulation still runs end-to-end
+- a saved checkpoint can be loaded during simulation if `model.pt` is valid

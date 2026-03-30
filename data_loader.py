@@ -63,6 +63,30 @@ class DataLoader:
     special_events: list[dict]
     _training_features: np.ndarray | None
     _training_labels: np.ndarray | None
+    LABEL_HORIZON_EVENTS: int = 25
+    LABEL_MOVE_THRESHOLD: float = 0.01
+    BASE_FEATURE_NAMES: tuple[str, ...] = (
+        "best_bid_price",
+        "best_bid_size",
+        "best_ask_price",
+        "best_ask_size",
+        "spread",
+        "mid_price",
+        "imbalance",
+        "bid_price_2",
+        "bid_size_2",
+        "ask_price_2",
+        "ask_size_2",
+        "event_side",
+    )
+    HISTORY_FEATURE_NAMES: tuple[str, ...] = (
+        "best_bid_price_delta_1",
+        "best_ask_price_delta_1",
+        "mid_price_delta_1",
+        "imbalance_delta_1",
+    )
+    FEATURE_NAMES: tuple[str, ...] = BASE_FEATURE_NAMES + HISTORY_FEATURE_NAMES
+    FEATURE_DIM: int = len(FEATURE_NAMES)
 
     def __init__(self, filepath: str | None = None) -> None:
         """Initialize this data loader with an optional CSV file path.
@@ -587,6 +611,7 @@ class DataLoader:
         engine = MatchingEngine(book)
         feature_rows = []
         mids = []
+        previous_base_features: np.ndarray | None = None
 
         for event in self.events:
             engine.process_event(event)
@@ -594,13 +619,15 @@ class DataLoader:
             if mid is None:
                 continue
             snapshot = book.depth_snapshot(levels=2)
-            feature_rows.append(
-                self._feature_vector_from_levels(
-                    snapshot.get('bids', []),
-                    snapshot.get('asks', []),
-                    self._event_side_value(event.side)
-                )
+            base_features = self._feature_vector_from_levels(
+                snapshot.get('bids', []),
+                snapshot.get('asks', []),
+                self._event_side_value(event.side)
             )
+            feature_rows.append(
+                self._augment_feature_vector(base_features, previous_base_features)
+            )
+            previous_base_features = base_features
             mids.append(mid)
 
         if not feature_rows:
@@ -621,6 +648,7 @@ class DataLoader:
 
         feature_rows = []
         mids = []
+        previous_base_features: np.ndarray | None = None
 
         for message_row, book_row in zip(self.raw_rows, orderbook_rows):
             event_type = int(float(message_row[1]))
@@ -632,13 +660,15 @@ class DataLoader:
             if mid is None:
                 continue
 
-            feature_rows.append(
-                self._feature_vector_from_levels(
-                    bids,
-                    asks,
-                    self._lobster_event_side_value(message_row)
-                )
+            base_features = self._feature_vector_from_levels(
+                bids,
+                asks,
+                self._lobster_event_side_value(message_row)
             )
+            feature_rows.append(
+                self._augment_feature_vector(base_features, previous_base_features)
+            )
+            previous_base_features = base_features
             mids.append(mid)
 
         if not feature_rows:
@@ -660,25 +690,9 @@ class DataLoader:
         """Write the current model-ready training dataset to a CSV file."""
         features, labels = self.build_training_dataset(orderbook_path)
 
-        header = [
-            "best_bid_price",
-            "best_bid_size",
-            "best_ask_price",
-            "best_ask_size",
-            "spread",
-            "mid_price",
-            "imbalance",
-            "bid_price_2",
-            "bid_size_2",
-            "ask_price_2",
-            "ask_size_2",
-            "event_side",
-            "label",
-        ]
-
         with open(path, "w", newline="") as file:
             writer = csv.writer(file)
-            writer.writerow(header)
+            writer.writerow(list(self.FEATURE_NAMES) + ["label"])
 
             for feature_row, label in zip(features, labels):
                 writer.writerow(feature_row.tolist() + [int(label)])
@@ -841,26 +855,42 @@ class DataLoader:
         ], dtype=np.float32)
 
     @staticmethod
+    def _augment_feature_vector(
+        base_features: np.ndarray,
+        previous_base_features: np.ndarray | None,
+    ) -> np.ndarray:
+        """Return the shared feature vector augmented with one-step deltas."""
+        if previous_base_features is None:
+            history_features = np.zeros(len(DataLoader.HISTORY_FEATURE_NAMES), dtype=np.float32)
+        else:
+            history_features = np.array([
+                base_features[0] - previous_base_features[0],
+                base_features[2] - previous_base_features[2],
+                base_features[5] - previous_base_features[5],
+                base_features[6] - previous_base_features[6],
+            ], dtype=np.float32)
+
+        return np.concatenate((base_features, history_features), dtype=np.float32)
+
+    @staticmethod
     def _labels_from_mid_sequence(mids: list[float]) -> np.ndarray:
-        """Return labels using the next-changed-mid rule."""
+        """Return labels using a fixed event horizon and small-move hold band."""
         if not mids:
             raise ValueError("Cannot derive labels from an empty mid-price sequence.")
 
-        next_diff_mid: list[float | None] = [None] * len(mids)
-        for i in range(len(mids) - 2, -1, -1):
-            if mids[i + 1] != mids[i]:
-                next_diff_mid[i] = mids[i + 1]
-            else:
-                next_diff_mid[i] = next_diff_mid[i + 1]
-
         labels = []
-        for current_mid, future_mid in zip(mids, next_diff_mid):
-            if future_mid is None:
-                labels.append(2)
-            elif future_mid > current_mid:
+        last_index = len(mids) - 1
+        for i, current_mid in enumerate(mids):
+            future_index = min(i + DataLoader.LABEL_HORIZON_EVENTS, last_index)
+            future_mid = mids[future_index]
+            delta = future_mid - current_mid
+
+            if delta > DataLoader.LABEL_MOVE_THRESHOLD:
                 labels.append(0)
-            else:
+            elif delta < -DataLoader.LABEL_MOVE_THRESHOLD:
                 labels.append(1)
+            else:
+                labels.append(2)
 
         return np.array(labels, dtype=np.int64)
 

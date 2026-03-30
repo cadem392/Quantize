@@ -36,6 +36,39 @@ if TYPE_CHECKING:
     from order_book import OrderBook
 
 
+def normalize_feature_vector(
+    features: np.ndarray,
+    feature_mean: np.ndarray | None,
+    feature_std: np.ndarray | None
+) -> np.ndarray:
+    """Return standardized features when normalization statistics are available."""
+    if feature_mean is None or feature_std is None:
+        return features.astype(np.float32, copy=False)
+
+    safe_std = np.where(feature_std == 0.0, 1.0, feature_std).astype(np.float32, copy=False)
+    return ((features - feature_mean) / safe_std).astype(np.float32, copy=False)
+
+
+def _load_checkpoint_payload(
+    path: str,
+    map_location: torch.device | str
+) -> tuple[dict[str, Tensor], np.ndarray | None, np.ndarray | None, int]:
+    """Return model weights and optional normalization stats from ``path``."""
+    raw_state = torch.load(path, map_location=map_location)
+
+    if isinstance(raw_state, dict) and "state_dict" in raw_state:
+        state_dict = raw_state["state_dict"]
+        feature_mean = raw_state.get("feature_mean")
+        feature_std = raw_state.get("feature_std")
+        mean_array = None if feature_mean is None else np.asarray(feature_mean, dtype=np.float32)
+        std_array = None if feature_std is None else np.asarray(feature_std, dtype=np.float32)
+        feature_dim = int(raw_state.get("feature_dim", state_dict["fc1.weight"].shape[1]))
+        return state_dict, mean_array, std_array, feature_dim
+
+    feature_dim = int(raw_state["fc1.weight"].shape[1])
+    return raw_state, None, None, feature_dim
+
+
 class OrderBookNet(nn.Module):
     """Feed-forward classifier: book features -> logits over {buy, sell, hold}."""
 
@@ -45,7 +78,7 @@ class OrderBookNet(nn.Module):
     relu: nn.ReLU
     dropout: nn.Dropout
 
-    def __init__(self, feature_dim: int = 12) -> None:
+    def __init__(self, feature_dim: int = QuantyzeDataLoader.FEATURE_DIM) -> None:
         """Build layers; ``feature_dim`` matches the length of build_features output."""
 
         super().__init__()
@@ -72,14 +105,16 @@ class Trainer:
     device: torch.device
     history: dict[str, list[float]]
 
-    def __init__(self, model: OrderBookNet) -> None:
-        """Attach Adam (lr=1e-3), cross-entropy loss, and move model to CPU/CUDA."""
+    def __init__(self, model: OrderBookNet, class_weights: Tensor | None = None) -> None:
+        """Attach Adam, optional weighted cross-entropy, and move model to CPU/CUDA."""
 
         self.model = model
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
-        self.criterion = nn.CrossEntropyLoss()
+        if class_weights is not None:
+            class_weights = class_weights.to(self.device).float()
+        self.criterion = nn.CrossEntropyLoss(weight=class_weights)
         self.history = {"train_loss": [], "val_loss": []}
 
     def train_epoch(self, loader: DataLoader) -> float:
@@ -131,6 +166,7 @@ class Trainer:
         """Train for ``epochs``; track history and persist the best weights to model.pt."""
 
         best_val = float("inf")
+        best_state: dict[str, Tensor] | None = None
 
         for epoch in range(epochs):
             train_loss = self.train_epoch(train_loader)
@@ -140,19 +176,35 @@ class Trainer:
 
             if val_loss < best_val:
                 best_val = val_loss
-                self.save("model.pt")
+                best_state = {
+                    key: value.detach().cpu().clone()
+                    for key, value in self.model.state_dict().items()
+                }
 
             print(f"Epoch {epoch + 1:03d}/{epochs} | train={train_loss:.6f} | val={val_loss:.6f}")
 
-    def save(self, path: str = "model.pt") -> None:
-        """Serialise ``model.state_dict()`` to ``path``."""
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
 
-        torch.save(self.model.state_dict(), path)
+    def save(
+        self,
+        path: str = "model.pt",
+        feature_mean: np.ndarray | None = None,
+        feature_std: np.ndarray | None = None
+    ) -> None:
+        """Serialise model weights and optional feature normalization stats."""
+
+        payload: dict[str, object] = {"state_dict": self.model.state_dict()}
+        if feature_mean is not None:
+            payload["feature_mean"] = np.asarray(feature_mean, dtype=np.float32).tolist()
+        if feature_std is not None:
+            payload["feature_std"] = np.asarray(feature_std, dtype=np.float32).tolist()
+        torch.save(payload, path)
 
     def load(self, path: str = "model.pt") -> None:
         """Load weights from ``path`` into ``model`` and set eval mode."""
 
-        state = torch.load(path, map_location=self.device)
+        state, _, _, _ = _load_checkpoint_payload(path, self.device)
         self.model.load_state_dict(state)
         self.model.eval()
 
@@ -165,41 +217,66 @@ class Agent:
     balance: float
     position: float
     pnl_log: list[float]
+    model_loaded: bool
+    feature_mean: np.ndarray | None
+    feature_std: np.ndarray | None
+    previous_base_features: np.ndarray | None
 
     def __init__(self, model_path: str = "model.pt") -> None:
         """Construct network, load ``model_path`` if present, init balance/position/pnl_log."""
 
-        self.model = OrderBookNet()
         self.action_map = {0: "buy", 1: "sell", 2: "hold"}
         self.balance = 0.0
         self.position = 0.0
         self.pnl_log = []
         self._model_path = model_path
+        self.model_loaded = False
+        self.feature_mean = None
+        self.feature_std = None
+        self.previous_base_features = None
 
-        self.model.eval()
+        feature_dim = QuantyzeDataLoader.FEATURE_DIM
 
         if os.path.exists(model_path) and os.path.getsize(model_path) > 0:
             try:
-                state = torch.load(model_path, map_location=torch.device("cpu"))
+                state, feature_mean, feature_std, feature_dim = _load_checkpoint_payload(
+                    model_path,
+                    torch.device("cpu")
+                )
+                self.model = OrderBookNet(feature_dim=feature_dim)
                 self.model.load_state_dict(state)
+                self.feature_mean = feature_mean
+                self.feature_std = feature_std
                 self.model.eval()
+                self.model_loaded = True
             except (EOFError, OSError, RuntimeError, ValueError) as exc:
                 warnings.warn(
                     f"Could not load checkpoint from {model_path!r}; using an untrained model instead. "
                     f"Reason: {exc}",
                     RuntimeWarning,
                 )
+                self.model = OrderBookNet(feature_dim=feature_dim)
+                self.model.eval()
+        else:
+            self.model = OrderBookNet(feature_dim=feature_dim)
+            self.model.eval()
 
-    @staticmethod
-    def observe(book: OrderBook) -> np.ndarray:
-        """Extract the feature vector (spread, depth bands, mid, imbalance, etc.)."""
+    def observe(self, book: OrderBook) -> np.ndarray:
+        """Extract the shared inference feature vector including one-step history."""
 
-        return build_features(book)
+        base_features = build_base_features(book)
+        features = QuantyzeDataLoader._augment_feature_vector(
+            base_features,
+            self.previous_base_features
+        )
+        self.previous_base_features = base_features
+        return features
 
     def act(self, book: OrderBook) -> str:
         """observe -> forward -> argmax -> action_map string."""
 
         features = self.observe(book)  # (feature_dim,)
+        features = normalize_feature_vector(features, self.feature_mean, self.feature_std)
         device = next(self.model.parameters()).device
         x = torch.from_numpy(features).float().unsqueeze(0).to(device)  # (1, feature_dim)
         self.model.eval()
@@ -237,8 +314,8 @@ class Agent:
         return float(sum(self.pnl_log))
 
 
-def build_features(book: OrderBook) -> np.ndarray:
-    """Return the shared 12-D inference feature vector from the current book."""
+def build_base_features(book: OrderBook) -> np.ndarray:
+    """Return the shared base inference vector from the current book."""
 
     snapshot = book.depth_snapshot(levels=2)
     bids = snapshot.get("bids", []) or []
@@ -246,7 +323,28 @@ def build_features(book: OrderBook) -> np.ndarray:
     return QuantyzeDataLoader._feature_vector_from_levels(bids, asks, 0.0)
 
 
-def load_agent(path: str) -> Agent:
+def build_features(
+    book: OrderBook,
+    previous_base_features: np.ndarray | None = None
+) -> np.ndarray:
+    """Return the shared history-aware inference vector from the current book."""
+
+    base_features = build_base_features(book)
+    return QuantyzeDataLoader._augment_feature_vector(base_features, previous_base_features)
+
+
+def load_agent(path: str) -> Agent | None:
     """Construct Agent and load weights from ``path`` for inference."""
 
-    return Agent(model_path=path)
+    if not os.path.exists(path):
+        return None
+
+    if os.path.getsize(path) == 0:
+        return None
+
+    agent = Agent(model_path=path)
+
+    if not agent.model_loaded:
+        return None
+
+    return agent
