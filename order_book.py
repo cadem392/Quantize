@@ -2,14 +2,11 @@
 
 Module Description
 ==================
-This module defines OrderBook: the live limit order book that coordinates a bid
-BookTree and an ask BookTree. It routes resting limit orders to the correct side,
-maintains an order_id → Order map for O(1) cancellation lookup, holds execution
-records for logging, and exposes best bid/ask, spread, mid-price, and depth
-snapshots to the matching engine and UI.
-
-The book does not perform matching; MatchingEngine consumes OrderBook state and
-mutates it through the public API.
+This module contains the live limit order book used by Quantyze. It
+coordinates a bid BookTree and an ask BookTree, routes resting limit orders to
+the correct side, maintains an order-id index for fast cancellations, records
+execution logs, and exposes best bid/ask, spread, mid-price, and depth
+snapshots to the rest of the system.
 
 Copyright Information
 ===============================
@@ -17,6 +14,7 @@ Copyright Information
 Copyright (c) 2026 Cade McNelly, Nicolas Miranda Cantanhede,
 Sahand Samadirand
 """
+
 import json
 
 from book_tree import BookTree
@@ -180,6 +178,6 @@ if __name__ == '__main__':
     python_ta.check_all(config={
         'extra-imports': ['book_tree', 'orders', 'price_level', 'json', 'doctest', 'python_ta'],
         'allowed-io': ['flush_log'],
-        'disable': ['forbidden-io-function'],
+        'disable': ['E9998'],
         'max-line-length': 120
     })

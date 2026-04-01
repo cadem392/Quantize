@@ -2,15 +2,15 @@
 
 Module Description
 ==================
-This module defines PriceLevel, the binary search tree node used for each
-distinct price on the bid or ask side. A PriceLevel stores the price key, a FIFO
-queue of resting Order objects (time priority within the level), and aggregate
-volume at that price.
+This module contains the PriceLevel class used as the node type inside the
+order-book BST. Each price level stores its price key, a FIFO queue of resting
+Order objects, aggregate quantity at that price, and left/right links for tree
+membership.
 
 The matching engine and book tree treat the front of the queue as the earliest
-arrival and thus the first matched at that price. Queue supports O(1) enqueue
-and dequeue at the ends and O(1) removal by order_id via a side index mapping
-ids to doubly linked list nodes.
+arrival and therefore the first order matched at that price. This module also
+includes the small internal queue node used to maintain O(1) enqueue, dequeue,
+and indexed removal within a level.
 
 Copyright Information
 ===============================
@@ -18,7 +18,9 @@ Copyright Information
 Copyright (c) 2026 Cade McNelly, Nicolas Miranda Cantanhede,
 Sahand Samadirand
 """
+
 from __future__ import annotations
+
 from orders import Order
 
 

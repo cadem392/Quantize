@@ -11,9 +11,6 @@ market:
 - the maximum price in the bids tree is the best bid
 - the minimum price in the asks tree is the best ask
 
-This module is responsible only for the tree structure itself. It does not
-handle order matching, transaction logging, or dataset parsing.
-
 Copyright Information
 ===============================
 
@@ -110,26 +107,34 @@ class BookTree:
             self.root = price_level
             self.size += 1
             return
+
+        curr = self.root
+        while curr is not None:
+            if price_level.price == curr.price:
+                return
+
+            child = self._next_child(curr, price_level.price)
+            if child is None:
+                self._attach_child(curr, price_level)
+                return
+
+            curr = child
+
+    @staticmethod
+    def _next_child(node: PriceLevel, price: float) -> PriceLevel | None:
+        """Return the subtree child reached when descending toward ``price``."""
+        if price < node.price:
+            return node.left
+        return node.right
+
+    def _attach_child(self, parent: PriceLevel, price_level: PriceLevel) -> None:
+        """Attach ``price_level`` as the correct child of ``parent``."""
+        if price_level.price < parent.price:
+            parent.left = price_level
         else:
-            curr = self.root
+            parent.right = price_level
 
-            while curr is not None:
-                if price_level.price == curr.price:
-                    return
-                elif price_level.price < curr.price:
-                    if curr.left is None:
-                        curr.left = price_level
-                        self.size += 1
-                        return
-
-                    curr = curr.left
-                else:
-                    if curr.right is None:
-                        curr.right = price_level
-                        self.size += 1
-                        return
-
-                    curr = curr.right
+        self.size += 1
 
     def delete(self, price: float) -> None:
         """Delete the PriceLevel at <price> from this tree.
@@ -256,6 +261,5 @@ if __name__ == '__main__':
     python_ta.check_all(config={
         'extra-imports': ['price_level', 'dataclasses', 'doctest', 'python_ta'],
         'allowed-io': [],
-        'disable': ['too-many-nested-blocks'],
         'max-line-length': 120
     })

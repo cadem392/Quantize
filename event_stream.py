@@ -1,8 +1,11 @@
+"""Quantyze event stream.
 
-"""Quantyze event streaming scaffolds.
-
-This module defines the EventStream class, which sequences Event objects and
-passes them to the matching engine during a simulation or replay.
+Module Description
+==================
+This module contains the EventStream used to replay a finite sequence of Event
+objects through the matching engine at a configurable speed. It tracks the
+current replay timestamp and provides start/stop control for simulation-time
+event emission.
 
 Copyright Information
 ===============================

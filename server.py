@@ -2,10 +2,10 @@
 
 Module Description
 ==================
-This module exposes JSON endpoints for health checks, book summary, depth,
-matching metrics, trade log, and execution records. It is intended to be
-constructed after a simulation run with the live ``OrderBook`` and
-``MatchingEngine`` instances created in ``main.py``.
+This module contains the Flask API helpers used to expose post-simulation
+state from Quantyze. It builds JSON endpoints for health checks, book summary,
+depth, matching metrics, trade logs, and execution records using the live
+``OrderBook`` and ``MatchingEngine`` instances created in ``main.py``.
 
 Copyright Information
 ===============================
@@ -90,6 +90,26 @@ def _api_metrics_payload(engine: MatchingEngine) -> dict[str, Any]:
     return engine.compute_metrics()
 
 
+def _load_trade_records(log_path: str | None) -> list[dict]:
+    """Return trade records loaded from ``log_path``, or an empty list on failure."""
+    if log_path is None:
+        return []
+
+    path = Path(log_path)
+    if not path.is_file():
+        return []
+
+    try:
+        with path.open(encoding="utf-8") as file:
+            loaded = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    if isinstance(loaded, list):
+        return loaded
+    return []
+
+
 def _api_trades_payload(
     book: OrderBook,
     limit: int,
@@ -100,15 +120,7 @@ def _api_trades_payload(
 
     records: list[dict] = list(book.trade_log)
     if not records and log_path:
-        path = Path(log_path)
-        if path.is_file():
-            try:
-                with path.open(encoding="utf-8") as fh:
-                    loaded = json.load(fh)
-                if isinstance(loaded, list):
-                    records = loaded
-            except (OSError, json.JSONDecodeError):
-                records = []
+        records = _load_trade_records(log_path)
 
     total = len(records)
     slice_records = records[offset: offset + limit]
@@ -242,6 +254,6 @@ if __name__ == '__main__':
             'json', 'pathlib', 'typing', 'flask', 'matching_engine',
             'neural_net', 'order_book', 'price_level', 'doctest', 'python_ta'
         ],
-        'allowed-io': ['_api_trades_payload', 'run_server'],
+        'allowed-io': ['_load_trade_records', 'run_server'],
         'max-line-length': 120
     })
