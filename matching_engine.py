@@ -1,22 +1,12 @@
-"""
-Quantyze matching engine
+"""Quantyze matching engine.
 
 Module Description
 ==================
 This module contains the matching engine used to process incoming market events
-against the live order book for Quantyze. It applies price-time priority by matching
-better prices first then enforcing FIFO order withing each level.
-
-The matching engine is responsible for:
-- routing income events to the correct processing logic
-- matching limit and market orders against the opposite side of the book
-- handling cancellations
-- producing fill records and execution logs
-- updating running execution metrics
-
-This module is responsible only for the matching and execution logic. It does not
-implement the BST structure itself, dataset parsing or visualization.
-
+against the live order book for Quantyze. It applies price-time priority by
+matching better prices first and then enforcing FIFO order within each price
+level. The engine also records fills, cancellations, and execution metrics
+during replay.
 
 Copyright Information
 ===============================

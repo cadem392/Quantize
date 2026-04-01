@@ -25,8 +25,8 @@ DATASET_PACKAGE_PATH = "quantyze_datasets.zip"
 
 
 @dataclass(frozen=True)
-class MenuConfig:
-    """Configuration and callbacks used by the interactive menu."""
+class MenuPaths:
+    """Runtime file paths used by the interactive menu."""
 
     model_path: str
     training_metrics_path: str
@@ -34,14 +34,105 @@ class MenuConfig:
     latest_training_metrics_path: str
     latest_training_data_path: str
     log_path: str
+    active_model_state_path: str
+
+
+@dataclass(frozen=True)
+class MenuDatasets:
+    """Packaged dataset names and supported synthetic scenarios."""
+
     sample_dataset_path: str
     huge_dataset_path: str
     scenario_choices: tuple[str, ...]
-    active_model_state_path: str
+
+
+@dataclass(frozen=True)
+class MenuCallbacks:
+    """Callables used by the interactive menu to run project workflows."""
+
     run_simulation: Callable[[argparse.Namespace], None]
     train_model: Callable[[str], dict[str, object]]
     get_active_model_status: Callable[[], dict[str, object]]
     set_active_model: Callable[[str], dict[str, object]]
+
+
+@dataclass(frozen=True)
+class MenuConfig:
+    """Configuration and callbacks used by the interactive menu."""
+
+    paths: MenuPaths
+    datasets: MenuDatasets
+    callbacks: MenuCallbacks
+
+    @property
+    def model_path(self) -> str:
+        """Return the packaged baseline checkpoint path."""
+        return self.paths.model_path
+
+    @property
+    def training_metrics_path(self) -> str:
+        """Return the packaged baseline metrics path."""
+        return self.paths.training_metrics_path
+
+    @property
+    def latest_model_path(self) -> str:
+        """Return the latest trained checkpoint path."""
+        return self.paths.latest_model_path
+
+    @property
+    def latest_training_metrics_path(self) -> str:
+        """Return the latest classifier metrics path."""
+        return self.paths.latest_training_metrics_path
+
+    @property
+    def latest_training_data_path(self) -> str:
+        """Return the latest exported training-data path."""
+        return self.paths.latest_training_data_path
+
+    @property
+    def log_path(self) -> str:
+        """Return the execution-log path."""
+        return self.paths.log_path
+
+    @property
+    def active_model_state_path(self) -> str:
+        """Return the persisted overlay-state path."""
+        return self.paths.active_model_state_path
+
+    @property
+    def sample_dataset_path(self) -> str:
+        """Return the packaged sample dataset path."""
+        return self.datasets.sample_dataset_path
+
+    @property
+    def huge_dataset_path(self) -> str:
+        """Return the packaged larger dataset path."""
+        return self.datasets.huge_dataset_path
+
+    @property
+    def scenario_choices(self) -> tuple[str, ...]:
+        """Return the supported synthetic scenario names."""
+        return self.datasets.scenario_choices
+
+    @property
+    def run_simulation(self) -> Callable[[argparse.Namespace], None]:
+        """Return the simulation callback."""
+        return self.callbacks.run_simulation
+
+    @property
+    def train_model(self) -> Callable[[str], dict[str, object]]:
+        """Return the training callback."""
+        return self.callbacks.train_model
+
+    @property
+    def get_active_model_status(self) -> Callable[[], dict[str, object]]:
+        """Return the active-overlay status callback."""
+        return self.callbacks.get_active_model_status
+
+    @property
+    def set_active_model(self) -> Callable[[str], dict[str, object]]:
+        """Return the active-overlay mutation callback."""
+        return self.callbacks.set_active_model
 
 
 def _print_metrics_file(path: str, heading: str) -> bool:
@@ -87,7 +178,7 @@ def print_saved_training_metrics(config: MenuConfig) -> None:
         print("No saved metrics found. Train a model first.")
 
 
-def print_baseline_training_metrics(config: MenuConfig) -> None:
+def print_baseline_metrics(config: MenuConfig) -> None:
     """Print only the packaged baseline metrics artifact."""
     if not _print_metrics_file(
         config.training_metrics_path,
@@ -271,8 +362,6 @@ def _run_simulation_menu(config: MenuConfig, args: argparse.Namespace) -> None:
         config.run_simulation(args)
     except (FileNotFoundError, ValueError, OSError) as exc:
         print(f"Simulation failed: {exc}")
-    except Exception as exc:  # pragma: no cover - defensive menu guard
-        print(f"Simulation failed unexpectedly: {type(exc).__name__}: {exc}")
 
 
 def _run_training_menu(config: MenuConfig, data_path: str, packaged: bool = False) -> None:
@@ -325,8 +414,6 @@ def _run_training_menu(config: MenuConfig, data_path: str, packaged: bool = Fals
             print("Simulation will continue using the current overlay setting.")
     except (FileNotFoundError, ValueError, OSError) as exc:
         print(f"Training failed: {exc}")
-    except Exception as exc:  # pragma: no cover - defensive menu guard
-        print(f"Training failed unexpectedly: {type(exc).__name__}: {exc}")
 
 
 def _print_training_output_targets(config: MenuConfig) -> None:
@@ -346,7 +433,7 @@ def _print_training_output_targets(config: MenuConfig) -> None:
     print("=" * 30)
 
 
-def _print_simulation_configuration(config: MenuConfig) -> None:
+def _print_sim_config(config: MenuConfig) -> None:
     """Print the current baseline simulation configuration."""
     status = config.get_active_model_status()
     print("Simulation Configuration")
@@ -415,7 +502,7 @@ def _print_log_summary(config: MenuConfig) -> None:
     print("=" * 30)
 
 
-def _print_dataset_package_contents() -> None:
+def _print_dataset_contents() -> None:
     """List the contents of quantyze_datasets.zip if it exists."""
     if not os.path.exists(DATASET_PACKAGE_PATH):
         print(f"Dataset package not found at {DATASET_PACKAGE_PATH}.")
@@ -562,7 +649,7 @@ def _simulation_menu(config: MenuConfig) -> None:
         elif choice == "4":
             _choose_active_model_menu(config)
         elif choice == "5":
-            _print_simulation_configuration(config)
+            _print_sim_config(config)
         else:
             print("Invalid option. Please enter a number from 1 to 6.")
 
@@ -618,7 +705,7 @@ def _artifacts_menu(config: MenuConfig) -> None:
         if choice == "1":
             _print_active_model_status(config)
         elif choice == "2":
-            print_baseline_training_metrics(config)
+            print_baseline_metrics(config)
         elif choice == "3":
             print_latest_training_metrics(config)
         elif choice == "4":
@@ -628,7 +715,7 @@ def _artifacts_menu(config: MenuConfig) -> None:
         elif choice == "6":
             _print_log_summary(config)
         elif choice == "7":
-            _print_dataset_package_contents()
+            _print_dataset_contents()
         else:
             print("Invalid option. Please enter a number from 1 to 8.")
 
@@ -693,16 +780,6 @@ if __name__ == '__main__':
             'argparse', 'json', 'os', 'zipfile', 'collections.abc', 'dataclasses',
             'doctest', 'python_ta'
         ],
-        'allowed-io': [
-            '_print_metrics_file', 'print_saved_training_metrics', 'print_baseline_training_metrics',
-            'print_latest_training_metrics', '_prompt_text', '_prompt_scenario', '_prompt_yes_no',
-            '_prompt_replay_speed', '_prompt_dataset_path', '_print_packaged_dataset_hint',
-            '_print_quick_ta_demo_intro', '_print_quick_ta_demo_followup', '_quick_ta_demo',
-            '_print_active_model_status', '_run_simulation_menu', '_run_training_menu',
-            '_print_training_output_targets', '_print_simulation_configuration',
-            '_print_artifact_status', '_print_log_summary', '_print_dataset_package_contents',
-            '_print_help_reference', '_choose_active_model_menu', '_simulation_menu',
-            '_training_menu', '_artifacts_menu', '_help_menu', 'interactive_menu'
-        ],
+        'disable': ['E9998'],
         'max-line-length': 120
     })
