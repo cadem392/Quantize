@@ -21,8 +21,6 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from neural_net import load_agent
-
 DATASET_PACKAGE_PATH = "quantyze_datasets.zip"
 
 
@@ -40,8 +38,11 @@ class MenuConfig:
     sample_dataset_path: str
     huge_dataset_path: str
     scenario_choices: tuple[str, ...]
+    active_model_state_path: str
     run_simulation: Callable[[argparse.Namespace], None]
     train_model: Callable[[str], dict[str, object]]
+    get_active_model_status: Callable[[], dict[str, object]]
+    set_active_model: Callable[[str], dict[str, object]]
 
 
 def _print_metrics_file(path: str, heading: str) -> bool:
@@ -126,6 +127,24 @@ def _prompt_scenario(config: MenuConfig) -> str | None:
         print(f"Invalid scenario. Please choose one of: {scenario_text}.")
 
 
+def _prompt_yes_no(prompt: str) -> bool | None:
+    """Prompt for a yes/no answer; blank defaults to no."""
+    while True:
+        response = _prompt_text(prompt)
+        if response is None:
+            return None
+
+        normalized = response.lower()
+        if normalized == "":
+            return False
+        if normalized in {"y", "yes"}:
+            return True
+        if normalized in {"n", "no"}:
+            return False
+
+        print("Please answer yes or no.")
+
+
 def _prompt_replay_speed() -> float | None:
     """Prompt for a non-negative replay speed; blank returns the default 0.0."""
     while True:
@@ -183,6 +202,35 @@ def _print_packaged_dataset_hint(dataset_name: str) -> None:
     )
 
 
+def _checkpoint_available(path: str | None) -> bool:
+    """Return whether ``path`` points to a non-empty checkpoint artifact."""
+    return path is not None and os.path.exists(path) and os.path.getsize(path) > 0
+
+
+def _path_text(path: object) -> str:
+    """Return a printable path string or ``None`` for missing values."""
+    if not isinstance(path, str) or path == "":
+        return "None"
+    return os.path.abspath(path)
+
+
+def _print_active_model_status(config: MenuConfig) -> dict[str, object]:
+    """Print the resolved active-model status and return it."""
+    status = config.get_active_model_status()
+    print("Active Model Status")
+    print("=" * 30)
+    print(f"Current Mode: {status['mode']}")
+    print(f"Checkpoint Path: {_path_text(status.get('model_path'))}")
+    print(f"Metrics Path: {_path_text(status.get('metrics_path'))}")
+    print(f"Provenance Label: {status.get('dataset_label', 'Unavailable')}")
+    print(f"Checkpoint Available: {status.get('checkpoint_exists', False)}")
+    print(f"State File: {_path_text(status.get('state_path'))}")
+    if status.get("note"):
+        print(f"Note: {status['note']}")
+    print("=" * 30)
+    return status
+
+
 def _run_simulation_menu(config: MenuConfig, args: argparse.Namespace) -> None:
     """Run one simulation from the interactive menu with friendly error handling."""
     try:
@@ -203,12 +251,43 @@ def _run_training_menu(config: MenuConfig, data_path: str, packaged: bool = Fals
         return
 
     try:
-        config.train_model(data_path)
+        training_result = config.train_model(data_path)
+        print("Training completed.")
+        print("=" * 30)
+        print(f"Dataset Used: {training_result.get('dataset_path', data_path)}")
+        print(f"Latest Checkpoint Output: {training_result.get('model_output_path', config.latest_model_path)}")
         print(
-            f"Saved baseline checkpoint remains at {config.model_path}. "
-            f"New training outputs were written to {config.latest_model_path} and "
-            f"{config.latest_training_metrics_path}."
+            "Latest Metrics Output: "
+            f"{training_result.get('metrics_output_path', config.latest_training_metrics_path)}"
         )
+        print(
+            "Latest Training Data Output: "
+            f"{training_result.get('training_data_output_path', config.latest_training_data_path)}"
+        )
+        print(f"Validation Accuracy: {training_result.get('val_accuracy', 'Unavailable')}")
+        print(
+            "Majority Baseline Accuracy: "
+            f"{training_result.get('majority_baseline_accuracy', 'Unavailable')}"
+        )
+        print(f"Baseline checkpoint remains at {config.model_path}.")
+        print("Interactive and direct retraining still write only to the latest_* artifacts.")
+        print("=" * 30)
+
+        activate_latest = _prompt_yes_no(
+            "Use this newly trained model for future simulations? [y/N]: "
+        )
+        if activate_latest is None:
+            print("Active model selection cancelled; keeping the current setting.")
+            return
+
+        if activate_latest:
+            status = config.set_active_model("latest")
+            print("Latest trained model is now active for future simulations.")
+            if status.get("note"):
+                print(f"Note: {status['note']}")
+        else:
+            status = config.get_active_model_status()
+            print(f"Active model remains set to {status['mode']}.")
     except (FileNotFoundError, ValueError, OSError) as exc:
         print(f"Training failed: {exc}")
     except Exception as exc:  # pragma: no cover - defensive menu guard
@@ -229,18 +308,23 @@ def _print_training_output_targets(config: MenuConfig) -> None:
     print(f"Metrics: {os.path.abspath(config.latest_training_metrics_path)}")
     print(f"Training Data: {os.path.abspath(config.latest_training_data_path)}")
     print("Interactive and direct retraining write only to the latest_* artifacts.")
+    print(f"Persistent active-model state: {os.path.abspath(config.active_model_state_path)}")
     print("=" * 30)
 
 
 def _print_simulation_configuration(config: MenuConfig) -> None:
     """Print the current baseline simulation configuration."""
-    checkpoint_loaded = load_agent(config.model_path) is not None
+    status = config.get_active_model_status()
     print("Simulation Configuration")
     print("=" * 30)
-    print(f"Baseline checkpoint path: {os.path.abspath(config.model_path)}")
-    print(f"Baseline checkpoint available: {checkpoint_loaded}")
+    print("Default simulation source: synthetic balanced")
+    print(f"Active model mode: {status['mode']}")
+    print(f"Active checkpoint path: {_path_text(status.get('model_path'))}")
+    print(f"Active model provenance: {status.get('dataset_label', 'Unavailable')}")
     print(f"Default execution log path: {os.path.abspath(config.log_path)}")
     print(f"Supported synthetic scenarios: {', '.join(config.scenario_choices)}")
+    if status.get("note"):
+        print(f"Note: {status['note']}")
     print("=" * 30)
 
 
@@ -321,6 +405,15 @@ def _print_help_reference(config: MenuConfig) -> None:
     """Print a concise command reference matching the README."""
     print("Quantyze Command Reference")
     print("=" * 30)
+    print("Workflow roles:")
+    print("  - synthetic balanced = default simulation demo")
+    print(f"  - {config.sample_dataset_path} = quick training demo")
+    print(f"  - {config.huge_dataset_path} = source of the shipped baseline checkpoint")
+    print("Training and simulation are separate modes connected by the active model.")
+    print(
+        f"The active model persists across runs through {config.active_model_state_path} "
+        "and can be baseline, latest, or none."
+    )
     print("Interactive menu:")
     print("  Mac/Linux: python3 main.py")
     print("  Windows:   py -3 main.py")
@@ -347,19 +440,58 @@ def _print_help_reference(config: MenuConfig) -> None:
     print("=" * 30)
 
 
+def _choose_active_model_menu(config: MenuConfig) -> None:
+    """Run the active-model selector submenu until the user goes back."""
+    while True:
+        latest_available = _checkpoint_available(config.latest_model_path)
+        print("\nChoose Active Model")
+        print("=" * 30)
+        print(f"1. Use baseline model ({config.model_path})")
+        latest_label = f"Use latest trained model ({config.latest_model_path})"
+        if not latest_available:
+            latest_label += " [Unavailable]"
+        print(f"2. {latest_label}")
+        print("3. Run without model")
+        print("4. Back")
+
+        choice = _prompt_text("Select an option (1-4): ")
+        if choice is None or choice == "4":
+            return
+
+        if choice == "1":
+            status = config.set_active_model("baseline")
+            print("Baseline model selected.")
+            if status.get("note"):
+                print(f"Note: {status['note']}")
+        elif choice == "2":
+            if not latest_available:
+                print(f"Latest trained checkpoint not found at {config.latest_model_path}.")
+                continue
+            status = config.set_active_model("latest")
+            print("Latest trained model selected.")
+            if status.get("note"):
+                print(f"Note: {status['note']}")
+        elif choice == "3":
+            config.set_active_model("none")
+            print("Future simulations will run without a model.")
+        else:
+            print("Invalid option. Please enter a number from 1 to 4.")
+
+
 def _simulation_menu(config: MenuConfig) -> None:
     """Run the simulation submenu until the user chooses to go back."""
     while True:
         print("\nSimulation Menu")
         print("=" * 30)
-        print("1. Run default saved-model simulation")
+        print("1. Run default synthetic demo (balanced)")
         print("2. Run synthetic scenario")
         print("3. Replay from dataset path")
-        print("4. View current simulation configuration")
-        print("5. Back")
+        print("4. Choose active model")
+        print("5. View current simulation configuration")
+        print("6. Back")
 
-        choice = _prompt_text("Select an option (1-5): ")
-        if choice is None or choice == "5":
+        choice = _prompt_text("Select an option (1-6): ")
+        if choice is None or choice == "6":
             return
 
         if choice == "1":
@@ -385,9 +517,11 @@ def _simulation_menu(config: MenuConfig) -> None:
 
             _run_simulation_menu(config, _build_runtime_args(data=data_path, speed=speed))
         elif choice == "4":
+            _choose_active_model_menu(config)
+        elif choice == "5":
             _print_simulation_configuration(config)
         else:
-            print("Invalid option. Please enter a number from 1 to 5.")
+            print("Invalid option. Please enter a number from 1 to 6.")
 
 
 def _training_menu(config: MenuConfig) -> None:
@@ -395,8 +529,8 @@ def _training_menu(config: MenuConfig) -> None:
     while True:
         print("\nTraining Menu")
         print("=" * 30)
-        print(f"1. Train on packaged {config.sample_dataset_path}")
-        print(f"2. Train on packaged {config.huge_dataset_path}")
+        print(f"1. Quick retraining demo on {config.sample_dataset_path}")
+        print(f"2. Retrain baseline-scale model on {config.huge_dataset_path}")
         print("3. Train on a custom dataset path")
         print("4. View training output targets")
         print("5. Back")
@@ -425,32 +559,35 @@ def _artifacts_menu(config: MenuConfig) -> None:
     while True:
         print("\nArtifacts & Metrics Menu")
         print("=" * 30)
-        print("1. View baseline metrics")
-        print("2. View latest metrics")
-        print("3. View both baseline and latest metrics")
-        print("4. View artifact status")
-        print("5. View log summary")
-        print("6. View dataset package contents")
-        print("7. Back")
+        print("1. View active model status")
+        print("2. View baseline metrics")
+        print("3. View latest metrics")
+        print("4. View both baseline and latest metrics")
+        print("5. View artifact status")
+        print("6. View log summary")
+        print("7. View dataset package contents")
+        print("8. Back")
 
-        choice = _prompt_text("Select an option (1-7): ")
-        if choice is None or choice == "7":
+        choice = _prompt_text("Select an option (1-8): ")
+        if choice is None or choice == "8":
             return
 
         if choice == "1":
-            print_baseline_training_metrics(config)
+            _print_active_model_status(config)
         elif choice == "2":
-            print_latest_training_metrics(config)
+            print_baseline_training_metrics(config)
         elif choice == "3":
-            print_saved_training_metrics(config)
+            print_latest_training_metrics(config)
         elif choice == "4":
-            _print_artifact_status(config)
+            print_saved_training_metrics(config)
         elif choice == "5":
-            _print_log_summary(config)
+            _print_artifact_status(config)
         elif choice == "6":
+            _print_log_summary(config)
+        elif choice == "7":
             _print_dataset_package_contents()
         else:
-            print("Invalid option. Please enter a number from 1 to 7.")
+            print("Invalid option. Please enter a number from 1 to 8.")
 
 
 def _help_menu(config: MenuConfig) -> None:

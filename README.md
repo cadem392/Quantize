@@ -41,6 +41,7 @@ Project references:
 
 Generated or runtime artifact names used by the project:
 - `log.json`
+- `active_model.json`
 - `model.pt`
 - `training_metrics.json`
 - `training_data.csv`
@@ -51,7 +52,7 @@ Generated or runtime artifact names used by the project:
 Submission dataset package:
 - `quantyze_datasets.zip`
 - package contents: `sample_internal.csv`, `huge_internal.csv`,
-  `dataset_manifest.txt`, `model.pt`, and `training_metrics.json`
+  `instructions.txt`, `model.pt`, and `training_metrics.json`
 - extract this zip beside `main.py` before using the packaged training options
 
 ## Architecture Summary
@@ -149,6 +150,15 @@ training runs from the menu or the direct CLI should write to:
 This keeps the packaged saved checkpoint stable for grading while still
 letting the TA run a short training example and inspect the new results.
 
+There are three distinct dataset roles in the project:
+- synthetic `balanced`: the default simulation demo source
+- `sample_internal.csv`: the quick retraining demo source
+- `huge_internal.csv`: the source of the shipped baseline checkpoint
+
+Training and simulation are separate runtime modes, but they are connected by
+`active_model.json`. This state file persists whether future simulations should
+use the baseline checkpoint, the latest trained checkpoint, or no model at all.
+
 ## TA Menu
 
 Running `main.py` with no arguments now opens the TA-facing interactive menu.
@@ -170,18 +180,21 @@ Main menu:
 - `Exit`
 
 Simulation submenu:
-- run the default saved-model simulation
+- run the default synthetic demo (`balanced`)
 - run a chosen synthetic scenario with a chosen replay speed
 - replay from a custom internal CSV or raw LOBSTER message CSV path
+- choose the active simulation model (`baseline`, `latest`, or `none`)
 - view the current simulation configuration
 
 Training submenu:
-- train on packaged `sample_internal.csv`
-- train on packaged `huge_internal.csv`
+- quick retraining demo on packaged `sample_internal.csv`
+- retrain a baseline-scale model on packaged `huge_internal.csv`
 - train on a custom dataset path
 - view the baseline-vs-latest training output targets
+- optionally activate the newly trained `latest_model.pt` for future simulations
 
 Artifacts & Metrics submenu:
+- view active model status
 - view baseline metrics
 - view latest metrics
 - view both baseline and latest metrics
@@ -190,8 +203,10 @@ Artifacts & Metrics submenu:
 - inspect the contents of `quantyze_datasets.zip`
 
 The submitted dataset zip should be extracted beside `main.py` before using the
-packaged training options. The default simulation continues to use `model.pt`
-even after new training runs create `latest_model.pt`.
+packaged training options. Simulation source and model source are now reported
+separately so it is always clear whether the program is replaying synthetic
+data, packaged data, or a custom dataset, and whether it is using the baseline
+checkpoint, the latest checkpoint, or no model.
 
 The interactive menu intentionally does not include the Flask / UI stub because
 that path is not yet a complete runtime flow.
@@ -218,6 +233,7 @@ py -3 main.py --no-ui
 ```
 
 This writes `log.json` in addition to printing the terminal summary.
+The active checkpoint is resolved through `active_model.json`.
 
 Train on an internal CSV:
 
@@ -235,6 +251,8 @@ This writes:
 - `latest_training_data.csv`
 
 It does not overwrite the shipped `model.pt` or `training_metrics.json`.
+From the interactive menu, you can optionally mark this newly trained model as
+the active checkpoint for later simulations.
 
 Train on the packaged huge internal CSV after extraction:
 

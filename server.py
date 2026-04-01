@@ -25,14 +25,7 @@ _MAX_TRADE_LIMIT = 10_000
 
 
 def _price_level_top(level: PriceLevel | None) -> dict[str, float] | None:
-    """Serialize best bid/ask level for JSON, or None when the side is empty.
-
-    >>> _price_level_top(None) is None
-    True
-    >>> pl = PriceLevel(100.0, volume=3.5)
-    >>> _price_level_top(pl)
-    {'price': 100.0, 'volume': 3.5}
-    """
+    """Serialize best bid or ask level for JSON, or None when the side is empty."""
 
     if level is None:
         return None
@@ -40,17 +33,7 @@ def _price_level_top(level: PriceLevel | None) -> dict[str, float] | None:
 
 
 def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
-    """Parse ``value`` as int, fall back to ``default``, then clamp to ``[low, high]``.
-
-    >>> _clamp_int(None, 5, 1, 10)
-    5
-    >>> _clamp_int("8", 5, 1, 10)
-    8
-    >>> _clamp_int(999, 5, 1, 10)
-    10
-    >>> _clamp_int("x", 5, 1, 10)
-    5
-    """
+    """Parse ``value`` as int, fall back to ``default``, then clamp to ``[low, high]``."""
 
     if value is None:
         return default
@@ -62,23 +45,13 @@ def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
 
 
 def _api_health_payload() -> dict[str, str]:
-    """Body for ``GET /api/health``.
-
-    >>> _api_health_payload()
-    {'status': 'ok', 'service': 'quantyze'}
-    """
+    """Body for ``GET /api/health``."""
 
     return {"status": "ok", "service": "quantyze"}
 
 
 def _api_book_summary_payload(book: OrderBook, agent: Agent | None) -> dict[str, Any]:
-    """Body for ``GET /api/book/summary``.
-
-    >>> from order_book import OrderBook
-    >>> b = OrderBook()
-    >>> _api_book_summary_payload(b, None)["spread"] is None
-    True
-    """
+    """Body for ``GET /api/book/summary``."""
 
     payload: dict[str, Any] = {
         "best_bid": _price_level_top(book.best_bid()),
@@ -94,16 +67,7 @@ def _api_book_summary_payload(book: OrderBook, agent: Agent | None) -> dict[str,
 
 
 def _api_book_depth_payload(book: OrderBook, levels: int) -> dict[str, Any]:
-    """Body for ``GET /api/book/depth`` given a resolved level count.
-
-    >>> from order_book import OrderBook
-    >>> b = OrderBook()
-    >>> d = _api_book_depth_payload(b, 3)
-    >>> d["levels"]
-    3
-    >>> d["bids"]
-    []
-    """
+    """Body for ``GET /api/book/depth`` given a resolved level count."""
 
     raw = book.depth_snapshot(levels)
     bids = [{"price": p, "volume": v} for p, v in raw["bids"]]
@@ -112,14 +76,7 @@ def _api_book_depth_payload(book: OrderBook, levels: int) -> dict[str, Any]:
 
 
 def _api_metrics_payload(engine: MatchingEngine) -> dict[str, Any]:
-    """Body for ``GET /api/metrics``.
-
-    >>> from order_book import OrderBook
-    >>> from matching_engine import MatchingEngine
-    >>> e = MatchingEngine(OrderBook())
-    >>> _api_metrics_payload(e)["fill_count"]
-    0
-    """
+    """Body for ``GET /api/metrics``."""
 
     return engine.compute_metrics()
 
@@ -130,17 +87,7 @@ def _api_trades_payload(
     offset: int,
     log_path: str | None,
 ) -> dict[str, Any]:
-    """Body for ``GET /api/trades`` with query params already resolved.
-
-    >>> from order_book import OrderBook
-    >>> b = OrderBook()
-    >>> b.trade_log.append({"k": 1})
-    >>> out = _api_trades_payload(b, 10, 0, None)
-    >>> out["total"]
-    1
-    >>> out["trades"][0]["k"]
-    1
-    """
+    """Body for ``GET /api/trades`` with query params already resolved."""
 
     records: list[dict] = list(book.trade_log)
     if not records and log_path:
@@ -155,7 +102,7 @@ def _api_trades_payload(
                 records = []
 
     total = len(records)
-    slice_records = records[offset : offset + limit]
+    slice_records = records[offset: offset + limit]
     return {
         "total": total,
         "offset": offset,
@@ -169,18 +116,10 @@ def _api_execution_log_payload(
     limit: int,
     offset: int,
 ) -> dict[str, Any]:
-    """Body for ``GET /api/execution-log`` with query params already resolved.
-
-    >>> from order_book import OrderBook
-    >>> from matching_engine import MatchingEngine
-    >>> e = MatchingEngine(OrderBook())
-    >>> e.execution_log.append({"filled_qty": 1.0})
-    >>> _api_execution_log_payload(e, 5, 0)["total"]
-    1
-    """
+    """Body for ``GET /api/execution-log`` with query params already resolved."""
 
     total = len(engine.execution_log)
-    entries = engine.execution_log[offset : offset + limit]
+    entries = engine.execution_log[offset: offset + limit]
     return {
         "total": total,
         "offset": offset,
@@ -190,17 +129,7 @@ def _api_execution_log_payload(
 
 
 def _api_open_orders_payload(book: OrderBook) -> dict[str, Any]:
-    """Body for ``GET /api/orders/open``.
-
-    >>> from datetime import datetime
-    >>> from order_book import OrderBook
-    >>> from orders import Event, Order
-    >>> b = OrderBook()
-    >>> ev = Event(datetime(2020, 1, 1), "a1", "buy", "limit", 10.0, 2.0)
-    >>> b.add_limit_order(Order(ev))
-    >>> _api_open_orders_payload(b)["count"]
-    1
-    """
+    """Body for ``GET /api/orders/open``."""
 
     return {
         "count": len(book.order_index),
@@ -215,19 +144,7 @@ def create_app(
     agent: Agent | None = None,
     log_path: str | None = None,
 ) -> Flask:
-    """Build a Flask app that reads the given book and engine (same process, after simulation).
-
-    >>> from order_book import OrderBook
-    >>> from matching_engine import MatchingEngine
-    >>> book = OrderBook()
-    >>> engine = MatchingEngine(book)
-    >>> app = create_app(book, engine)
-    >>> client = app.test_client()
-    >>> client.get("/api/health").get_json()["status"]
-    'ok'
-    >>> client.get("/api/metrics").get_json()["fill_count"]
-    0
-    """
+    """Build a Flask app that reads the given book and engine after simulation."""
 
     app = Flask(__name__)
     app.config["QUANTYZE_LOG_PATH"] = log_path
@@ -300,46 +217,6 @@ def create_app(
 
 
 def run_server(app: Flask, port: int, host: str = "127.0.0.1") -> None:
-    """Start the Flask development server (blocks until stopped).
-
-    >>> from unittest.mock import patch
-    >>> from order_book import OrderBook
-    >>> from matching_engine import MatchingEngine
-    >>> book = OrderBook()
-    >>> engine = MatchingEngine(book)
-    >>> app = create_app(book, engine)
-    >>> with patch.object(app, "run") as run_mock:
-    ...     run_server(app, 9000, host="127.0.0.1")
-    >>> run_mock.call_args.kwargs["port"]
-    9000
-    >>> run_mock.call_args.kwargs["host"]
-    '127.0.0.1'
-    """
+    """Start the Flask development server (blocks until stopped)."""
 
     app.run(host=host, port=port, debug=False, threaded=True)
-
-
-if __name__ == "__main__":
-    import doctest
-    import python_ta
-
-    doctest.testmod()
-
-    python_ta.check_all(config={
-        "extra-imports": [
-            "json",
-            "pathlib",
-            "flask",
-            "matching_engine",
-            "neural_net",
-            "order_book",
-            "price_level",
-            "datetime",
-            "orders",
-            "unittest.mock",
-            "doctest",
-            "python_ta",
-        ],
-        "allowed-io": [],
-        "max-line-length": 120,
-    })

@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 
 import torch
@@ -50,9 +51,11 @@ LATEST_MODEL_PATH = "latest_model.pt"
 LATEST_TRAINING_METRICS_PATH = "latest_training_metrics.json"
 LATEST_TRAINING_DATA_PATH = "latest_training_data.csv"
 LOG_PATH = "log.json"
+ACTIVE_MODEL_STATE_PATH = "active_model.json"
 SAMPLE_DATASET_PATH = "sample_internal.csv"
 HUGE_DATASET_PATH = "huge_internal.csv"
 SCENARIO_CHOICES = ("balanced", "low_liquidity", "high_volatility")
+ACTIVE_MODEL_MODES = ("baseline", "latest", "none")
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,8 +114,166 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _checkpoint_exists(path: str | None) -> bool:
+    """Return whether ``path`` points to a non-empty checkpoint file."""
+    return path is not None and os.path.exists(path) and os.path.getsize(path) > 0
+
+
+def _dataset_label_for_path(dataset_path: str | None) -> str:
+    """Return a short human-readable label for a dataset path."""
+    if not dataset_path:
+        return "unknown"
+
+    dataset_name = os.path.basename(dataset_path)
+    if dataset_name in {SAMPLE_DATASET_PATH, HUGE_DATASET_PATH}:
+        return dataset_name
+
+    return f"custom ({dataset_name})"
+
+
+def _dataset_label_from_metrics(metrics_path: str, fallback: str) -> str:
+    """Return a dataset label inferred from ``metrics_path`` if possible."""
+    try:
+        with open(metrics_path, encoding="utf-8") as file:
+            metrics = json.load(file)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return fallback
+
+    dataset_path = metrics.get("dataset_path")
+    if not isinstance(dataset_path, str):
+        return fallback
+
+    return _dataset_label_for_path(dataset_path)
+
+
+def _active_model_payload(mode: str, dataset_label: str | None = None) -> dict[str, object]:
+    """Return the persisted payload for the selected active-model mode."""
+    if mode == "baseline":
+        return {
+            "mode": "baseline",
+            "model_path": MODEL_PATH,
+            "metrics_path": TRAINING_METRICS_PATH,
+            "dataset_label": dataset_label or HUGE_DATASET_PATH,
+        }
+    if mode == "latest":
+        latest_label = dataset_label or _dataset_label_from_metrics(
+            LATEST_TRAINING_METRICS_PATH,
+            "latest training",
+        )
+        return {
+            "mode": "latest",
+            "model_path": LATEST_MODEL_PATH,
+            "metrics_path": LATEST_TRAINING_METRICS_PATH,
+            "dataset_label": latest_label,
+        }
+    if mode == "none":
+        return {
+            "mode": "none",
+            "model_path": None,
+            "metrics_path": None,
+            "dataset_label": dataset_label or "No active model",
+        }
+
+    raise ValueError(f"Unsupported active model mode: {mode}")
+
+
+def _load_active_model_payload() -> dict[str, object] | None:
+    """Return the saved active-model payload, or None if unavailable/invalid."""
+    try:
+        with open(ACTIVE_MODEL_STATE_PATH, encoding="utf-8") as file:
+            payload = json.load(file)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    mode = payload.get("mode")
+    if mode not in ACTIVE_MODEL_MODES:
+        return None
+
+    return payload
+
+
+def save_active_model_selection(mode: str, dataset_label: str | None = None) -> dict[str, object]:
+    """Persist and return the selected active-model payload."""
+    payload = _active_model_payload(mode, dataset_label)
+    with open(ACTIVE_MODEL_STATE_PATH, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
+    return payload
+
+
+def resolve_active_model_status() -> dict[str, object]:
+    """Return the resolved active-model status, applying safe fallbacks."""
+    raw_payload = _load_active_model_payload()
+    note = ""
+
+    if raw_payload is None:
+        requested_mode = "baseline" if _checkpoint_exists(MODEL_PATH) else "none"
+        note = "Active model state was missing or invalid; using the default selection."
+    else:
+        requested_mode = str(raw_payload["mode"])
+
+    if requested_mode == "latest":
+        if _checkpoint_exists(LATEST_MODEL_PATH):
+            resolved_payload = _active_model_payload(
+                "latest",
+                raw_payload.get("dataset_label")
+                if isinstance(raw_payload, dict)
+                and isinstance(raw_payload.get("dataset_label"), str)
+                else None,
+            )
+        elif _checkpoint_exists(MODEL_PATH):
+            resolved_payload = _active_model_payload("baseline")
+            note = "Latest checkpoint was unavailable; fell back to the baseline model."
+        else:
+            resolved_payload = _active_model_payload("none")
+            note = "Latest checkpoint was unavailable; running without a model."
+    elif requested_mode == "baseline":
+        if _checkpoint_exists(MODEL_PATH):
+            resolved_payload = _active_model_payload("baseline")
+        else:
+            resolved_payload = _active_model_payload("none")
+            note = "Baseline checkpoint was unavailable; running without a model."
+    else:
+        resolved_payload = _active_model_payload("none")
+
+    if raw_payload != resolved_payload:
+        save_active_model_selection(
+            str(resolved_payload["mode"]),
+            resolved_payload["dataset_label"]
+            if isinstance(resolved_payload.get("dataset_label"), str)
+            else None,
+        )
+
+    model_path = resolved_payload["model_path"]
+    return {
+        **resolved_payload,
+        "requested_mode": requested_mode,
+        "checkpoint_exists": _checkpoint_exists(model_path if isinstance(model_path, str) else None),
+        "state_path": ACTIVE_MODEL_STATE_PATH,
+        "note": note,
+    }
+
+
+def set_active_model_selection(mode: str) -> dict[str, object]:
+    """Persist a requested mode and return the resolved active-model status."""
+    save_active_model_selection(mode)
+    return resolve_active_model_status()
+
+
+def _simulation_source_label(args: argparse.Namespace) -> str:
+    """Return a concise label for the selected simulation source."""
+    if args.data is not None:
+        return args.data
+    if args.scenario is not None:
+        return f"synthetic {args.scenario}"
+    return "synthetic balanced"
+
+
 def build_system(
-    args: argparse.Namespace
+    args: argparse.Namespace,
+    model_path: str | None = None,
 ) -> tuple[OrderBook, MatchingEngine, EventStream, Agent | None, DataLoader]:
     """Construct and return the core Quantyze system objects.
 
@@ -136,10 +297,10 @@ def build_system(
 
     stream = EventStream(events, engine, args.speed)
 
-    if args.train:
+    if args.train or model_path is None:
         agent = None
     else:
-        agent = load_agent(MODEL_PATH)
+        agent = load_agent(model_path)
 
     return book, engine, stream, agent, loader
 
@@ -303,6 +464,7 @@ def train_model(
         "confusion_matrix": metrics["confusion_matrix"],
         "dataset_path": data_path,
         "model_output_path": model_path,
+        "metrics_output_path": metrics_path,
         "training_data_output_path": training_data_path,
     }
 
@@ -327,12 +489,27 @@ def train_model(
 
 def run_simulation_from_args(args: argparse.Namespace) -> None:
     """Run one simulation from a prepared argument namespace."""
-    book, engine, stream, agent, loader = build_system(args)
+    active_model_status = resolve_active_model_status()
+    model_path = active_model_status["model_path"]
+    book, engine, stream, agent, loader = build_system(
+        args,
+        model_path if isinstance(model_path, str) else None,
+    )
+
+    print("Simulation Run Configuration")
+    print("=" * 30)
+    print(f"Simulation Source: {_simulation_source_label(args)}")
+    print(f"Active Model Mode: {active_model_status['mode']}")
+    print(f"Active Model Path: {active_model_status['model_path'] or 'None'}")
+    print(f"Model Provenance: {active_model_status['dataset_label']}")
+    if active_model_status["note"]:
+        print(f"Note: {active_model_status['note']}")
+    print("=" * 30)
 
     if agent is None:
-        print(f"Running without ML checkpoint; {MODEL_PATH} is missing or invalid.")
+        print("Running without an active ML checkpoint.")
     else:
-        print(f"Loaded saved model checkpoint from {MODEL_PATH}.")
+        print(f"Loaded active model checkpoint from {active_model_status['model_path']}.")
 
     if args.data is not None:
         print(f"Replay dataset path: {args.data}")
@@ -349,6 +526,10 @@ def run_simulation_from_args(args: argparse.Namespace) -> None:
 
     run_simulation(stream, agent, book)
     print_summary(engine, agent)
+    if agent is None:
+        print("Simulation used no active model.")
+    else:
+        print(f"Simulation used the {active_model_status['mode']} model.")
 
     if args.no_ui:
         book.flush_log(LOG_PATH)
@@ -379,8 +560,11 @@ def _build_menu_config() -> MenuConfig:
         sample_dataset_path=SAMPLE_DATASET_PATH,
         huge_dataset_path=HUGE_DATASET_PATH,
         scenario_choices=SCENARIO_CHOICES,
+        active_model_state_path=ACTIVE_MODEL_STATE_PATH,
         run_simulation=run_simulation_from_args,
-        train_model=train_model
+        train_model=train_model,
+        get_active_model_status=resolve_active_model_status,
+        set_active_model=set_active_model_selection,
     )
 
 
