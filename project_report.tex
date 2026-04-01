@@ -391,7 +391,8 @@ We recommend the following sequence:
     matching engine.
     \item Open \texttt{Training}. For a short demonstration, use
     \texttt{sample\_internal.csv}. For a baseline-scale demonstration, use
-    \texttt{huge\_internal.csv}. For the real-data path, use
+    \texttt{huge\_internal.csv}. \\
+    For the real-data path, use
     \texttt{aapl\_lobster\_2012-06-21\_message\_5level\_sample.csv}. The
     latter two are both much larger and take longer to load. After training,
     the menu prints the latest output file paths and asks whether the new
@@ -587,3 +588,27 @@ visualization layer, add a stronger sequence-aware model, and evaluate the
 trained agent with more realistic trading metrics across multiple market days.
 Even with those limitations, we think the current submission succeeds as a
 CSC111 project because it combines tree-based design, non-trivial event
+processing, model training, and interpretable output in one coherent system.
+More importantly, it still reflects the original motivation behind the project:
+to make the hidden mechanics of a market feel concrete rather than abstract.
+
+\section*{7. References}
+\begin{enumerate}
+    \item LOBSTER. (n.d.). \textit{Sample data}. Retrieved March 31, 2026, from
+    \url{https://data.lobsterdata.com/info/DataSamples.php}
+    \item PyTorch. (n.d.). \textit{PyTorch}. Retrieved March 31, 2026, from
+    \url{https://pytorch.org/}
+    \item Investopedia. (n.d.). \textit{Limit order book}. Retrieved March 31,
+    2026, from
+    \url{https://www.investopedia.com/terms/l/limitorderbook.asp}
+    \item Investopedia. (n.d.). \textit{Depth of market (DOM)}. Retrieved March
+    31, 2026, from
+    \url{https://www.investopedia.com/terms/d/depth-of-market.asp}
+    \item QuestDB. (n.d.). \textit{Limit order book}. Retrieved March 31, 2026,
+    from \url{https://questdb.com/glossary/limit-order-book/}
+    \item University of Oxford. (2019). \textit{Introduction to limit order book
+    markets}. Retrieved March 31, 2026, from
+    \url{https://www.maths.ox.ac.uk/system/files/attachments/NUS-LOB19.pdf}
+\end{enumerate}
+
+\end{document}
