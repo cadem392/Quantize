@@ -3,10 +3,7 @@
 Module Description
 ==================
 This module recreates the packaged ``sample_internal.csv`` and
-``huge_internal.csv`` files in Quantyze's canonical event format. The small
-dataset is a fixed deterministic internal event stream, and the large dataset
-is built by repeating that stream with shifted timestamps and suffixed order
-ids so the events remain independent.
+``huge_internal.csv`` files in Quantyze's event format
 
 Copyright Information
 ===============================
