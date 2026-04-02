@@ -2,16 +2,11 @@
 
 Module Description
 ==================
-PyTorch model (OrderBookNet), training loop (Trainer), and inference wrapper
-(Agent) that map order-book features to discrete actions (buy / sell / hold).
-Trained on event or feature data derived from training_data.csv; checkpoints
-are saved as model.pt for Agent.load-style workflows.
-
-build_features and Agent.observe extract a fixed-size vector from OrderBook
-snapshots (spread, depth, mid, imbalance, etc.) for forward passes.
-
-This module does not run the matching engine or Flask API; it consumes book
-state and produces logits or action strings.
+This module contains the PyTorch classifier components used by Quantyze: the
+OrderBookNet model, the Trainer, and the Agent wrapper used for
+simulation-time inference. It builds fixed-size order-book feature vectors,
+trains or saves checkpoints, and converts model predictions into overlay
+actions.
 
 Copyright Information
 ===============================
@@ -24,7 +19,7 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
 
 import numpy as np
 import torch
@@ -32,9 +27,7 @@ from torch import Tensor, nn, optim
 from torch.utils.data import DataLoader
 
 from data_loader import DataLoader as QuantyzeDataLoader
-
-if TYPE_CHECKING:
-    from order_book import OrderBook
+from order_book import OrderBook
 
 
 def normalize_feature_vector(
@@ -42,7 +35,15 @@ def normalize_feature_vector(
     feature_mean: np.ndarray | None,
     feature_std: np.ndarray | None
 ) -> np.ndarray:
-    """Return standardized features when normalization statistics are available."""
+    """Return standardized features when normalization statistics are available.
+
+    >>> normalize_feature_vector(
+    ...     np.array([2.0, 4.0], dtype=np.float32),
+    ...     np.array([1.0, 1.0], dtype=np.float32),
+    ...     np.array([1.0, 0.0], dtype=np.float32)
+    ... ).tolist()
+    [1.0, 3.0]
+    """
     if feature_mean is None or feature_std is None:
         return features.astype(np.float32, copy=False)
 
@@ -71,7 +72,18 @@ def _load_checkpoint_payload(
 
 
 class OrderBookNet(nn.Module):
-    """Feed-forward classifier: book features -> logits over {buy, sell, hold}."""
+    """Feed-forward classifier from book features to action logits.
+
+    Instance Attributes:
+    - fc1: the first linear layer from feature space to the hidden layer
+    - fc2: the second linear hidden layer
+    - fc3: the output layer producing logits for three classes
+    - relu: the shared ReLU activation module
+    - dropout: the shared dropout module used between layers
+
+    Representation Invariants:
+    - self.fc3.out_features == 3
+    """
 
     fc1: nn.Linear
     fc2: nn.Linear
@@ -79,7 +91,7 @@ class OrderBookNet(nn.Module):
     relu: nn.ReLU
     dropout: nn.Dropout
 
-    def __init__(self, feature_dim: int = QuantyzeDataLoader.FEATURE_DIM) -> None:
+    def __init__(self, feature_dim: int = QuantyzeDataLoader.feature_dim) -> None:
         """Build layers; ``feature_dim`` matches the length of build_features output."""
 
         super().__init__()
@@ -98,7 +110,19 @@ class OrderBookNet(nn.Module):
 
 
 class Trainer:
-    """Training loop, loss, optimiser, and checkpoint I/O for OrderBookNet."""
+    """Training loop, optimizer, and checkpoint I/O for ``OrderBookNet``.
+
+    Instance Attributes:
+    - model: the classifier being trained or evaluated
+    - optimizer: the Adam optimizer attached to the model parameters
+    - criterion: the training loss function
+    - device: the torch device on which training runs
+    - history: recorded training and validation losses by epoch
+
+    Representation Invariants:
+    - 'train_loss' in self.history
+    - 'val_loss' in self.history
+    """
 
     model: OrderBookNet
     optimizer: optim.Adam
@@ -106,13 +130,18 @@ class Trainer:
     device: torch.device
     history: dict[str, list[float]]
 
-    def __init__(self, model: OrderBookNet, class_weights: Tensor | None = None) -> None:
+    def __init__(
+        self,
+        model: OrderBookNet,
+        class_weights: Tensor | None = None,
+        learning_rate: float = 3e-4
+    ) -> None:
         """Attach Adam, optional weighted cross-entropy, and move model to CPU/CUDA."""
 
         self.model = model
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=3e-4)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         if class_weights is not None:
             class_weights = class_weights.to(self.device).float()
         self.criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -164,7 +193,7 @@ class Trainer:
         val_loader: DataLoader,
         epochs: int = 50,
     ) -> None:
-        """Train for ``epochs``; track history and persist the best weights to model.pt."""
+        """Train for ``epochs`` and keep the best validation-loss state in memory."""
 
         best_val = float("inf")
         best_state: dict[str, Tensor] | None = None
@@ -208,34 +237,72 @@ class Trainer:
         self.model.eval()
 
 
+@dataclass
+class _PortfolioState:
+    """Track the simulated overlay inventory and profit state.
+
+    Instance Attributes:
+    - balance: the running cash balance from simulated overlay trades
+    - position: the current signed inventory held by the overlay
+    - pnl_log: the time series of mark-to-market P&L values
+
+    Representation Invariants:
+    - len(self.pnl_log) >= 0
+    """
+
+    balance: float = 0.0
+    position: float = 0.0
+    pnl_log: list[float] = field(default_factory=list)
+
+
+@dataclass
+class _FeatureState:
+    """Track feature normalization and one-step feature history for the agent.
+
+    Instance Attributes:
+    - mean: the stored feature means used for normalization, or None if absent
+    - std: the stored feature standard deviations used for normalization, or None if absent
+    - previous_base: the previous unaugmented base feature vector, or None if absent
+
+    Representation Invariants:
+    - self.mean is None or self.std is None or len(self.mean) == len(self.std)
+    """
+
+    mean: np.ndarray | None = None
+    std: np.ndarray | None = None
+    previous_base: np.ndarray | None = None
+
+
 class Agent:
-    """Loads OrderBookNet in eval mode; maps snapshots to an action string."""
+    """Simulation-time classifier wrapper used for overlay inference.
+
+    Instance Attributes:
+    - model: the loaded neural-network classifier used for inference
+    - action_map: maps predicted class indices to action strings
+    - portfolio: the overlay portfolio state accumulated during simulation
+    - feature_state: the normalization statistics and one-step feature history
+    - model_loaded: whether a checkpoint was loaded successfully
+
+    Representation Invariants:
+    - set(self.action_map.keys()) == {0, 1, 2}
+    - set(self.action_map.values()) == {'buy', 'sell', 'hold'}
+    """
 
     model: OrderBookNet
     action_map: dict[int, str]
-    balance: float
-    position: float
-    pnl_log: list[float]
+    portfolio: _PortfolioState
+    feature_state: _FeatureState
     model_loaded: bool
-    feature_mean: np.ndarray | None
-    feature_std: np.ndarray | None
-    previous_base_features: np.ndarray | None
-    _model_path: str
 
     def __init__(self, model_path: str = "model.pt") -> None:
         """Construct network, load ``model_path`` if present, init balance/position/pnl_log."""
 
         self.action_map = {0: "buy", 1: "sell", 2: "hold"}
-        self.balance = 0.0
-        self.position = 0.0
-        self.pnl_log = []
-        self._model_path = model_path
+        self.portfolio = _PortfolioState()
+        self.feature_state = _FeatureState()
         self.model_loaded = False
-        self.feature_mean = None
-        self.feature_std = None
-        self.previous_base_features = None
 
-        feature_dim = QuantyzeDataLoader.FEATURE_DIM
+        feature_dim = QuantyzeDataLoader.feature_dim
 
         if os.path.exists(model_path) and os.path.getsize(model_path) > 0:
             try:
@@ -245,8 +312,8 @@ class Agent:
                 )
                 self.model = OrderBookNet(feature_dim=feature_dim)
                 self.model.load_state_dict(state)
-                self.feature_mean = feature_mean
-                self.feature_std = feature_std
+                self.feature_state.mean = feature_mean
+                self.feature_state.std = feature_std
                 self.model.eval()
                 self.model_loaded = True
             except (EOFError, OSError, RuntimeError, ValueError) as exc:
@@ -267,16 +334,20 @@ class Agent:
         base_features = build_base_features(book)
         features = QuantyzeDataLoader.augment_feature_vector(
             base_features,
-            self.previous_base_features
+            self.feature_state.previous_base
         )
-        self.previous_base_features = base_features
+        self.feature_state.previous_base = base_features
         return features
 
     def act(self, book: OrderBook) -> str:
         """observe -> forward -> argmax -> action_map string."""
 
         features = self.observe(book)  # (feature_dim,)
-        features = normalize_feature_vector(features, self.feature_mean, self.feature_std)
+        features = normalize_feature_vector(
+            features,
+            self.feature_state.mean,
+            self.feature_state.std
+        )
         device = next(self.model.parameters()).device
         x = torch.from_numpy(features).float().unsqueeze(0).to(device)  # (1, feature_dim)
         self.model.eval()
@@ -293,25 +364,33 @@ class Agent:
         action = self.act(book)
         qty = 1.0
         if action == "buy":
-            self.position += qty
-            self.balance -= qty * fill_price
+            self.portfolio.position += qty
+            self.portfolio.balance -= qty * fill_price
         elif action == "sell":
-            self.position -= qty
-            self.balance += qty * fill_price
-        pnl = self.balance + self.position * fill_price
-        self.pnl_log.append(pnl)
+            self.portfolio.position -= qty
+            self.portfolio.balance += qty * fill_price
+        pnl = self.portfolio.balance + self.portfolio.position * fill_price
+        self.portfolio.pnl_log.append(pnl)
         return {
             "action": action,
             "fill_price": float(fill_price),
-            "position": float(self.position),
-            "balance": float(self.balance),
+            "position": float(self.portfolio.position),
+            "balance": float(self.portfolio.balance),
             "pnl": float(pnl),
         }
 
-    def total_pnl(self) -> float:
-        """Sum of ``pnl_log`` entries."""
+    def current_pnl(self) -> float:
+        """Return the latest mark-to-market P&L value, or 0.0 if no fills occurred."""
 
-        return float(sum(self.pnl_log))
+        if self.portfolio.pnl_log == []:
+            return 0.0
+
+        return float(self.portfolio.pnl_log[-1])
+
+    def total_pnl(self) -> float:
+        """Return the current mark-to-market P&L for backward compatibility."""
+
+        return self.current_pnl()
 
 
 def build_base_features(book: OrderBook) -> np.ndarray:
@@ -358,13 +437,12 @@ if __name__ == '__main__':
 
     python_ta.check_all(config={
         'extra-imports': [
-            'os', 'warnings', 'typing', 'numpy', 'torch',
+            'dataclasses', 'os', 'warnings', 'numpy', 'torch',
             'torch.utils.data', 'data_loader', 'order_book', 'doctest', 'python_ta'
         ],
-        'disable': [
-            'forbidden-top-level-code',
-            'forbidden-io-function',
-            'too-many-instance-attributes'
+        'allowed-io': [
+            '_load_checkpoint_payload', 'Trainer.save', 'Trainer.load',
+            'Agent.__init__', 'load_agent'
         ],
         'max-line-length': 120
     })

@@ -2,14 +2,11 @@
 
 Module Description
 ==================
-This module defines OrderBook: the live limit order book that coordinates a bid
-BookTree and an ask BookTree. It routes resting limit orders to the correct side,
-maintains an order_id → Order map for O(1) cancellation lookup, holds execution
-records for logging, and exposes best bid/ask, spread, mid-price, and depth
-snapshots to the matching engine and UI.
-
-The book does not perform matching; MatchingEngine consumes OrderBook state and
-mutates it through the public API.
+This module contains the live limit order book used by Quantyze. It
+coordinates a bid BookTree and an ask BookTree, routes resting limit orders to
+the correct side, maintains an order-id index for fast cancellations, records
+execution logs, and exposes best bid/ask, spread, mid-price, and depth
+snapshots to the rest of the system.
 
 Copyright Information
 ===============================
@@ -17,6 +14,7 @@ Copyright Information
 Copyright (c) 2026 Cade McNelly, Nicolas Miranda Cantanhede,
 Sahand Samadirand
 """
+
 import json
 
 from book_tree import BookTree
@@ -27,11 +25,15 @@ from price_level import PriceLevel
 class OrderBook:
     """Full limit order book: bid BST, ask BST, order index, and trade log.
 
-    Attributes:
-        bids: BST of bid-side PriceLevels; best bid is the maximum price in the tree.
-        asks: BST of ask-side PriceLevels; best ask is the minimum price in the tree.
-        order_index: Maps order_id to Order for fast cancellation lookup.
-        trade_log: Running list of execution records; flushed to disk as log.json.
+    Instance Attributes:
+    - bids: the bid-side BST of price levels
+    - asks: the ask-side BST of price levels
+    - order_index: maps each live resting order_id to its Order object
+    - trade_log: the in-memory list of recorded trade dictionaries
+
+    Representation Invariants:
+    - self.bids.side == 'bid'
+    - self.asks.side == 'ask'
     """
 
     bids: BookTree
@@ -53,7 +55,22 @@ class OrderBook:
         return f"{self.__class__.__name__}({self.bids}, {self.asks})"
 
     def add_limit_order(self, order: Order) -> None:
-        """Insert the order into the bid or ask BST at its limit price and register it in order_index."""
+        """Insert the order into the bid or ask BST at its limit price and register it in order_index.
+
+        >>> from datetime import datetime
+        >>> from orders import Event
+        >>> book = OrderBook()
+        >>> book.add_limit_order(
+        ...     Order(Event(datetime(2026, 1, 1, 9, 30), 'b1', 'buy', 'limit', 99.5, 3.0))
+        ... )
+        >>> book.add_limit_order(
+        ...     Order(Event(datetime(2026, 1, 1, 9, 30, 1), 's1', 'sell', 'limit', 100.5, 2.0))
+        ... )
+        >>> (book.best_bid().price, book.best_ask().price)
+        (99.5, 100.5)
+        >>> (book.spread(), book.mid_price())
+        (1.0, 100.0)
+        """
 
         price_level = PriceLevel(order.price)
         price_level.add_order(order)
@@ -75,6 +92,19 @@ class OrderBook:
         """Look up order_id in order_index, mark the order cancelled, remove it from
         its PriceLevel queue, and prune empty price nodes. Return whether the
         cancellation succeeded.
+
+        >>> from datetime import datetime
+        >>> from orders import Event
+        >>> book = OrderBook()
+        >>> book.add_limit_order(
+        ...     Order(Event(datetime(2026, 1, 1, 9, 30), 'b1', 'buy', 'limit', 99.5, 3.0))
+        ... )
+        >>> book.cancel_order('b1')
+        True
+        >>> book.best_bid() is None
+        True
+        >>> 'b1' in book.order_index
+        False
         """
 
         if order_id not in self.order_index:
@@ -144,6 +174,21 @@ class OrderBook:
 
         Shape is ``{'bids': [...], 'asks': [...]}`` with each side a list of
         ``(price, volume)`` tuples suitable for charts and API responses.
+
+        >>> from datetime import datetime
+        >>> from orders import Event
+        >>> book = OrderBook()
+        >>> book.add_limit_order(
+        ...     Order(Event(datetime(2026, 1, 1, 9, 30), 'b1', 'buy', 'limit', 99.0, 1.0))
+        ... )
+        >>> book.add_limit_order(
+        ...     Order(Event(datetime(2026, 1, 1, 9, 30, 1), 'b2', 'buy', 'limit', 98.5, 2.0))
+        ... )
+        >>> book.add_limit_order(
+        ...     Order(Event(datetime(2026, 1, 1, 9, 30, 2), 's1', 'sell', 'limit', 100.0, 1.5))
+        ... )
+        >>> book.depth_snapshot(levels=1)
+        {'bids': [(99.0, 1.0)], 'asks': [(100.0, 1.5)]}
         """
 
         bid_nodes = self.bids.inorder()
@@ -180,6 +225,6 @@ if __name__ == '__main__':
     python_ta.check_all(config={
         'extra-imports': ['book_tree', 'orders', 'price_level', 'json', 'doctest', 'python_ta'],
         'allowed-io': ['flush_log'],
-        'disable': ['forbidden-io-function'],
+        'disable': ['E9998'],
         'max-line-length': 120
     })

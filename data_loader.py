@@ -1,10 +1,11 @@
-"""Quantyze event loading, dataset building, and LOBSTER annotations.
+"""Quantyze data loading and dataset building.
 
-This module defines the DataLoader class, which is responsible for reading
-event data from CSV files, validating the loaded data, creating synthetic
-event sequences for experiments and testing, building model-ready feature
-and label arrays from either canonical Quantyze CSVs or raw LOBSTER files,
-and exposing non-replayable LOBSTER rows as visualization-ready annotations.
+Module Description
+==================
+This module contains the DataLoader used to read Quantyze CSV files, parse raw
+LOBSTER message files, generate synthetic scenarios, and build feature/label
+datasets for classifier training. It also exposes normalized non-replayable
+LOBSTER rows as annotations for later visualization or inspection.
 
 Copyright Information
 ===============================
@@ -18,18 +19,34 @@ from __future__ import annotations
 import csv
 import os
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import TypedDict
 
 import numpy as np
 
 from matching_engine import MatchingEngine
 from order_book import OrderBook
 from orders import Event
+from synthetic_scenarios import generate_synthetic_events
 
 
-class ParsedLobsterRow(TypedDict):
-    """Typed representation of one normalized raw LOBSTER message row."""
+@dataclass
+class ParsedLobsterRow:
+    """Parsed representation of one normalized raw LOBSTER message row.
+
+    Instance Attributes:
+    - timestamp: the decoded event timestamp
+    - event_type: the raw LOBSTER event-type code
+    - order_id: the decoded order identifier
+    - size: the event quantity
+    - price_int: the integer price from the source row
+    - direction: the raw LOBSTER direction code
+    - resting_side: the inferred resting-order side, or None if not applicable
+
+    Representation Invariants:
+    - self.size >= 0
+    - self.direction in {-1, 1}
+    """
 
     timestamp: datetime
     event_type: int
@@ -40,6 +57,37 @@ class ParsedLobsterRow(TypedDict):
     resting_side: str | None
 
 
+class _LobsterCache:
+    """Cache raw LOBSTER rows and derived annotations.
+
+    Instance Attributes:
+    - raw_rows: the cached raw message rows
+    - raw_orderbook_rows: the cached raw order-book rows
+    - special_events: the cached non-replayable visualization annotations
+
+    Representation Invariants:
+    - len(self.raw_rows) >= 0
+    - len(self.raw_orderbook_rows) >= 0
+    - len(self.special_events) >= 0
+    """
+
+    raw_rows: list[list[str]]
+    raw_orderbook_rows: list[list[float]]
+    special_events: list[dict[str, object]]
+
+    def __init__(
+        self,
+        raw_rows: list[list[str]] | None = None,
+        raw_orderbook_rows: list[list[float]] | None = None,
+        special_events: list[dict[str, object]] | None = None,
+    ) -> None:
+
+        """Initialize cached LOBSTER rows and derived annotations."""
+        self.raw_rows = [] if raw_rows is None else raw_rows
+        self.raw_orderbook_rows = [] if raw_orderbook_rows is None else raw_orderbook_rows
+        self.special_events = [] if special_events is None else special_events
+
+
 class DataLoader:
     """Load, validate, and generate collections of Event objects.
 
@@ -48,24 +96,22 @@ class DataLoader:
     - events: the list of loaded or synthetically generated events
     - schema: the column names expected or found in the input CSV
     - source_format: one of {'internal', 'lobster', 'synthetic'}, or None if unset
-    - raw_rows: raw message rows kept for LOBSTER-backed dataset building
-    - raw_orderbook_rows: raw orderbook rows aligned with LOBSTER message rows
-    - special_events: JSON-safe annotations for recognized non-replayable
-      LOBSTER rows such as cross trades and trading halts
+    - lobster_cache: cached raw LOBSTER rows and visualization annotations
+
+    Representation Invariants:
+    - self.source_format in {None, 'internal', 'lobster', 'synthetic'}
+    - self.feature_dim == len(self.feature_names)
     """
 
     filepath: str | None
     events: list[Event]
     schema: list[str]
     source_format: str | None
-    raw_rows: list[list[str]]
-    raw_orderbook_rows: list[list[float]]
-    special_events: list[dict]
-    _training_features: np.ndarray | None
-    _training_labels: np.ndarray | None
-    LABEL_HORIZON_EVENTS: int = 50
-    LABEL_MOVE_THRESHOLD: float = 0.01
-    BASE_FEATURE_NAMES: tuple[str, ...] = (
+    lobster_cache: _LobsterCache
+    _training_dataset_cache: tuple[np.ndarray, np.ndarray] | None
+    label_horizon_events: int = 50
+    label_move_threshold: float = 0.01
+    base_feature_names: tuple[str, ...] = (
         "best_bid_price",
         "best_bid_size",
         "best_ask_price",
@@ -79,14 +125,14 @@ class DataLoader:
         "ask_size_2",
         "event_side",
     )
-    HISTORY_FEATURE_NAMES: tuple[str, ...] = (
+    history_feature_names: tuple[str, ...] = (
         "best_bid_price_delta_1",
         "best_ask_price_delta_1",
         "mid_price_delta_1",
         "imbalance_delta_1",
     )
-    FEATURE_NAMES: tuple[str, ...] = BASE_FEATURE_NAMES + HISTORY_FEATURE_NAMES
-    FEATURE_DIM: int = len(FEATURE_NAMES)
+    feature_names: tuple[str, ...] = base_feature_names + history_feature_names
+    feature_dim: int = len(feature_names)
 
     def __init__(self, filepath: str | None = None) -> None:
         """Initialize this data loader with an optional CSV file path.
@@ -98,11 +144,38 @@ class DataLoader:
         self.events = []
         self.schema = []
         self.source_format = None
-        self.raw_rows = []
-        self.raw_orderbook_rows = []
-        self.special_events = []
-        self._training_features = None
-        self._training_labels = None
+        self.lobster_cache = _LobsterCache()
+        self._training_dataset_cache = None
+
+    @property
+    def raw_rows(self) -> list[list[str]]:
+        """Return cached raw LOBSTER message rows."""
+        return self.lobster_cache.raw_rows
+
+    @raw_rows.setter
+    def raw_rows(self, rows: list[list[str]]) -> None:
+        """Replace the cached raw LOBSTER message rows."""
+        self.lobster_cache.raw_rows = rows
+
+    @property
+    def raw_orderbook_rows(self) -> list[list[float]]:
+        """Return cached raw LOBSTER orderbook rows."""
+        return self.lobster_cache.raw_orderbook_rows
+
+    @raw_orderbook_rows.setter
+    def raw_orderbook_rows(self, rows: list[list[float]]) -> None:
+        """Replace the cached raw LOBSTER orderbook rows."""
+        self.lobster_cache.raw_orderbook_rows = rows
+
+    @property
+    def special_events(self) -> list[dict[str, object]]:
+        """Return cached non-replayable LOBSTER annotations."""
+        return self.lobster_cache.special_events
+
+    @special_events.setter
+    def special_events(self, events: list[dict[str, object]]) -> None:
+        """Replace the cached non-replayable LOBSTER annotations."""
+        self.lobster_cache.special_events = events
 
     def load_csv(self) -> list[Event]:
         """Read this loader's CSV file and convert its rows into Event objects.
@@ -120,9 +193,7 @@ class DataLoader:
             except StopIteration:
                 self.schema = []
                 self.events = []
-                self.raw_rows = []
-                self.raw_orderbook_rows = []
-                self.special_events = []
+                self.lobster_cache = _LobsterCache()
                 self.source_format = None
                 self._reset_training_cache()
                 return []
@@ -173,9 +244,7 @@ class DataLoader:
 
         self.events = events
         self.source_format = 'internal'
-        self.raw_rows = []
-        self.raw_orderbook_rows = []
-        self.special_events = []
+        self.lobster_cache = _LobsterCache()
         self._reset_training_cache()
         return self.events
 
@@ -209,9 +278,10 @@ class DataLoader:
         self.schema = ['Time', 'Event Type', 'Order ID', 'Size', 'Price', 'Direction']
         self.events = events
         self.source_format = 'lobster'
-        self.raw_rows = data_rows
-        self.raw_orderbook_rows = []
-        self.special_events = annotation_records
+        self.lobster_cache = _LobsterCache(
+            raw_rows=data_rows,
+            special_events=annotation_records,
+        )
         self._reset_training_cache()
         return self.events
 
@@ -269,7 +339,17 @@ class DataLoader:
 
     @staticmethod
     def _parse_lobster_row(row: list[str], trade_date: date) -> ParsedLobsterRow:
-        """Parse one raw LOBSTER row into a normalized dictionary."""
+        """Parse one raw LOBSTER row into a normalized data object.
+
+        >>> parsed_lobster = DataLoader._parse_lobster_row(
+        ...     ['34200.5', '1', '77', '10', '1005000', '1'],
+        ...     date(2026, 1, 1)
+        ... )
+        >>> (parsed_lobster.event_type, parsed_lobster.order_id, parsed_lobster.resting_side)
+        (1, '77', 'buy')
+        >>> parsed_lobster.timestamp.isoformat()
+        '2026-01-01T09:30:00.500000'
+        """
         if len(row) != 6:
             raise ValueError(f"LOBSTER rows must have exactly 6 columns, got {len(row)}.")
 
@@ -285,18 +365,18 @@ class DataLoader:
 
         timestamp = datetime.combine(trade_date, datetime.min.time()) + timedelta(seconds=time_seconds)
 
-        parsed: ParsedLobsterRow = {
-            "timestamp": timestamp,
-            "event_type": event_type,
-            "order_id": order_id,
-            "size": size,
-            "price_int": price_int,
-            "direction": direction,
-            "resting_side": None,
-        }
+        parsed = ParsedLobsterRow(
+            timestamp=timestamp,
+            event_type=event_type,
+            order_id=order_id,
+            size=size,
+            price_int=price_int,
+            direction=direction,
+            resting_side=None,
+        )
 
         if event_type != 7:
-            parsed["resting_side"] = DataLoader._lobster_direction_to_side(direction)
+            parsed.resting_side = DataLoader._lobster_direction_to_side(direction)
 
         return parsed
 
@@ -308,12 +388,12 @@ class DataLoader:
         events because they are surfaced as visualization annotations instead.
         """
         parsed = DataLoader._parse_lobster_row(row, trade_date)
-        event_type = parsed["event_type"]
-        timestamp = parsed["timestamp"]
-        order_id = parsed["order_id"]
-        size = parsed["size"]
-        price_int = parsed["price_int"]
-        resting_side = parsed["resting_side"]
+        event_type = parsed.event_type
+        timestamp = parsed.timestamp
+        order_id = parsed.order_id
+        size = parsed.size
+        price_int = parsed.price_int
+        resting_side = parsed.resting_side
 
         if event_type in {1, 2, 3, 4, 5} and resting_side is None:
             raise ValueError(f"LOBSTER event type {event_type} is missing a resting side.")
@@ -345,12 +425,12 @@ class DataLoader:
     ) -> dict | None:
         """Convert one raw LOBSTER row into a visualization annotation, if applicable."""
         parsed = DataLoader._parse_lobster_row(row, trade_date)
-        event_type = parsed["event_type"]
-        timestamp = parsed["timestamp"]
-        price_int = parsed["price_int"]
-        size = parsed["size"]
-        direction = parsed["direction"]
-        resting_side = parsed["resting_side"]
+        event_type = parsed.event_type
+        timestamp = parsed.timestamp
+        price_int = parsed.price_int
+        size = parsed.size
+        direction = parsed.direction
+        resting_side = parsed.resting_side
 
         if event_type == 6:
             return {
@@ -396,163 +476,11 @@ class DataLoader:
         - scenario in {'balanced', 'low_liquidity', 'high_volatility'}
         - n >= 0
         """
-        if scenario == 'balanced':
-            self.events = self._balanced_flow(n)
-        elif scenario == 'low_liquidity':
-            self.events = self._low_liquidity(n)
-        elif scenario == 'high_volatility':
-            self.events = self._high_volatility(n)
-        else:
-            raise ValueError(f"Unknown scenario: {scenario}")
-
+        self.events = generate_synthetic_events(scenario, n)
         self.source_format = 'synthetic'
-        self.raw_rows = []
-        self.raw_orderbook_rows = []
-        self.special_events = []
+        self.lobster_cache = _LobsterCache()
         self._reset_training_cache()
         return self.events
-
-    @staticmethod
-    def _balanced_flow(n: int) -> list[Event]:
-        """Return n synthetic events for a stable but active market.
-
-        Preconditions:
-        - n >= 0
-        """
-
-        base_time = datetime.now()
-        events = []
-        tracked_buy_ids = []
-        tracked_sell_ids = []
-
-        def _add_event(odr_id: str, side: str, order_type: str, price: float | None, qty: float) -> None:
-            """Append one event using the next sequential synthetic timestamp."""
-            timestamp = base_time + timedelta(seconds=len(events))
-            event = Event(timestamp, odr_id, side, order_type, price, qty)
-            events.append(event)
-
-        # Seed the book with a small ladder of resting bids and asks near 100.
-        seed_orders = [
-            ("seed_bid_0", "buy", "limit", 99.9, 12.0),
-            ("seed_ask_0", "sell", "limit", 100.1, 12.0),
-            ("seed_bid_1", "buy", "limit", 99.8, 10.0),
-            ("seed_ask_1", "sell", "limit", 100.2, 10.0),
-            ("seed_bid_2", "buy", "limit", 99.7, 8.0),
-            ("seed_ask_2", "sell", "limit", 100.3, 8.0),
-        ]
-
-        i = 0
-        while len(events) < n and i < len(seed_orders):
-            _add_event(
-                seed_orders[i][0],
-                seed_orders[i][1],
-                seed_orders[i][2],
-                seed_orders[i][3],
-                seed_orders[i][4]
-            )
-            i += 1
-
-        cycle_so_far = 0
-        while len(events) < n:
-            step = cycle_so_far % 8
-            index = len(events)
-
-            if step == 0:
-                order_id = f"rest_bid_{index}"
-                tracked_buy_ids.append(order_id)
-                _add_event(order_id, "buy", "limit", 99.7, 4.0)
-            elif step == 1:
-                order_id = f"rest_ask_{index}"
-                tracked_sell_ids.append(order_id)
-                _add_event(order_id, "sell", "limit", 100.3, 4.0)
-            elif step == 2:
-                _add_event(f"cross_buy_{index}", "buy", "limit", 100.2, 6.0)
-
-            elif step == 3:
-                _add_event(f"cross_sell_{index}", "sell", "limit", 99.8, 6.0)
-
-            elif step == 4:
-                _add_event(f"market_buy_{index}", "buy", "market", None, 4.0)
-
-            elif step == 5:
-                _add_event(f"market_sell_{index}", "sell", "market", None, 4.0)
-
-            elif step == 6 and tracked_buy_ids:
-                _add_event(tracked_buy_ids.pop(0), "buy", "cancel", None, 0.0)
-
-            elif step == 7 and tracked_sell_ids:
-                _add_event(tracked_sell_ids.pop(0), "sell", "cancel", None, 0.0)
-            else:
-                if step == 6:
-                    order_id = f"fallback_bid_{index}"
-                    tracked_buy_ids.append(order_id)
-                    _add_event(order_id, "buy", "limit", 99.7, 4.0)
-                else:
-                    order_id = f"fallback_ask_{index}"
-                    tracked_sell_ids.append(order_id)
-                    _add_event(order_id, "sell", "limit", 100.3, 4.0)
-
-            cycle_so_far += 1
-
-        return events
-
-    @staticmethod
-    def _low_liquidity(n: int) -> list[Event]:
-        """Return n synthetic events representing a thin market with a wide spread.
-
-        Preconditions:
-        - n >= 0
-        """
-        base_time = datetime.now()
-        synthetic_events = []
-
-        for i in range(n):
-            timestamp = base_time + timedelta(seconds=i * 10)
-            side = 'buy' if i % 10 == 0 else 'sell'
-            price = 98.0 if side == 'buy' else 102.0
-            event = Event(timestamp, f"order_{i}", side, 'limit', price, 5.0)
-            synthetic_events.append(event)
-
-        return synthetic_events
-
-    @staticmethod
-    def _high_volatility(n: int) -> list[Event]:
-        """Return n synthetic events with rapidly changing prices and order types.
-
-        Preconditions:
-        - n >= 0
-        """
-        base_time = datetime.now()
-        synthetic_events = []
-        current_price = 100.0
-
-        for i in range(n):
-            timestamp = base_time + timedelta(seconds=i)
-            side = 'buy' if i % 2 == 0 else 'sell'
-
-            if i % 4 == 0:
-                current_price += 3.0
-            elif i % 4 == 1:
-                current_price -= 2.5
-            elif i % 4 == 2:
-                current_price += 4.0
-            else:
-                current_price -= 3.5
-
-            if i % 5 == 0:
-                event = Event(timestamp, f"volatility_order_{i}", side, 'market', None, 5.0 + (i % 4) * 2.0)
-            else:
-                event = Event(
-                    timestamp,
-                    f"volatility_order_{i}",
-                    side,
-                    'limit',
-                    current_price,
-                    5.0 + (i % 4) * 2.0
-                )
-            synthetic_events.append(event)
-
-        return synthetic_events
 
     def validate(self) -> list[str]:
         """Return a list of data-quality errors found in this loader's events."""
@@ -585,24 +513,23 @@ class DataLoader:
 
     def build_training_dataset(self, orderbook_path: str | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Return model-ready features and labels for this loader's current source."""
-        if self._training_features is not None and self._training_labels is not None:
-            return self._training_features, self._training_labels
+        if self._training_dataset_cache is not None:
+            return self._training_dataset_cache
 
         if self.filepath is not None and not self.events:
             self.load_csv()
 
         if self.source_format == 'lobster':
-            features, labels = self._build_lobster_training_dataset(orderbook_path)
+            features, labels = self._build_lobster_dataset(orderbook_path)
         elif self.events:
-            features, labels = self._build_internal_training_dataset()
+            features, labels = self._build_internal_dataset()
         else:
             raise ValueError("No source data is loaded for training dataset construction.")
 
-        self._training_features = features
-        self._training_labels = labels
+        self._training_dataset_cache = (features, labels)
         return features, labels
 
-    def _build_internal_training_dataset(self) -> tuple[np.ndarray, np.ndarray]:
+    def _build_internal_dataset(self) -> tuple[np.ndarray, np.ndarray]:
         """Build training rows by replaying events through the local engine."""
         if not self.events:
             raise ValueError("No events are available for internal training dataset construction.")
@@ -635,12 +562,12 @@ class DataLoader:
 
         return np.vstack(feature_rows).astype(np.float32), self._labels_from_mid_sequence(mids)
 
-    def _build_lobster_training_dataset(self, orderbook_path: str | None) -> tuple[np.ndarray, np.ndarray]:
+    def _build_lobster_dataset(self, orderbook_path: str | None) -> tuple[np.ndarray, np.ndarray]:
         """Build training rows from aligned raw LOBSTER message and orderbook files."""
         if not self.raw_rows:
             raise ValueError("No raw LOBSTER message rows are loaded.")
 
-        resolved_orderbook = self._resolve_lobster_orderbook_path(orderbook_path)
+        resolved_orderbook = self._resolve_orderbook_path(orderbook_path)
         orderbook_rows = self._load_lobster_orderbook(resolved_orderbook)
 
         if len(orderbook_rows) != len(self.raw_rows):
@@ -655,7 +582,7 @@ class DataLoader:
             if event_type == 7:
                 continue
 
-            bids, asks = self._levels_from_lobster_orderbook_row(book_row, levels=2)
+            bids, asks = self._levels_from_lobster_row(book_row, levels=2)
             mid = self._mid_from_levels(bids, asks)
             if mid is None:
                 continue
@@ -692,7 +619,7 @@ class DataLoader:
 
         with open(path, "w", newline="") as file:
             writer = csv.writer(file)
-            writer.writerow(list(self.FEATURE_NAMES) + ["label"])
+            writer.writerow(list(self.feature_names) + ["label"])
 
             for feature_row, label in zip(features, labels):
                 writer.writerow(feature_row.tolist() + [int(label)])
@@ -701,7 +628,7 @@ class DataLoader:
         """Return a copy of the LOBSTER-specific visualization annotations."""
         return [annotation.copy() for annotation in self.special_events]
 
-    def _resolve_lobster_orderbook_path(self, explicit_path: str | None) -> str:
+    def _resolve_orderbook_path(self, explicit_path: str | None) -> str:
         """Return the paired LOBSTER orderbook filepath for this message file."""
         if explicit_path is not None:
             if not os.path.exists(explicit_path):
@@ -774,7 +701,7 @@ class DataLoader:
         return 0.0
 
     @staticmethod
-    def _levels_from_lobster_orderbook_row(
+    def _levels_from_lobster_row(
         row: list[float], levels: int = 2
     ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
         """Return best-first bid and ask levels from one raw LOBSTER orderbook row."""
@@ -858,7 +785,15 @@ class DataLoader:
         asks: list[tuple[float, float]],
         event_side: float,
     ) -> np.ndarray:
-        """Return the public base feature vector used by training and inference."""
+        """Return the public base feature vector used by training and inference.
+
+        >>> DataLoader.feature_vector_from_levels(
+        ...     [(99.0, 3.0), (98.5, 1.0)],
+        ...     [(101.0, 1.0), (101.5, 2.0)],
+        ...     1.0
+        ... ).tolist()
+        [99.0, 3.0, 101.0, 1.0, 2.0, 100.0, 0.5, 98.5, 1.0, 101.5, 2.0, 1.0]
+        """
         return DataLoader._feature_vector_from_levels(bids, asks, event_side)
 
     @staticmethod
@@ -868,7 +803,7 @@ class DataLoader:
     ) -> np.ndarray:
         """Return the shared feature vector augmented with one-step deltas."""
         if previous_base_features is None:
-            history_features = np.zeros(len(DataLoader.HISTORY_FEATURE_NAMES), dtype=np.float32)
+            history_features = np.zeros(len(DataLoader.history_feature_names), dtype=np.float32)
         else:
             history_features = np.array([
                 base_features[0] - previous_base_features[0],
@@ -896,13 +831,13 @@ class DataLoader:
         labels = []
         last_index = len(mids) - 1
         for i, current_mid in enumerate(mids):
-            future_index = min(i + DataLoader.LABEL_HORIZON_EVENTS, last_index)
+            future_index = min(i + DataLoader.label_horizon_events, last_index)
             future_mid = mids[future_index]
             delta = future_mid - current_mid
 
-            if delta > DataLoader.LABEL_MOVE_THRESHOLD:
+            if delta > DataLoader.label_move_threshold:
                 labels.append(0)
-            elif delta < -DataLoader.LABEL_MOVE_THRESHOLD:
+            elif delta < -DataLoader.label_move_threshold:
                 labels.append(1)
             else:
                 labels.append(2)
@@ -911,8 +846,7 @@ class DataLoader:
 
     def _reset_training_cache(self) -> None:
         """Clear any cached training dataset arrays."""
-        self._training_features = None
-        self._training_labels = None
+        self._training_dataset_cache = None
 
 
 if __name__ == '__main__':
@@ -923,13 +857,17 @@ if __name__ == '__main__':
 
     python_ta.check_all(config={
         'extra-imports': [
-            'csv', 'os', 're', 'datetime', 'typing', 'numpy',
-            'matching_engine', 'order_book', 'orders', 'doctest', 'python_ta'
+            'csv', 'os', 're', 'dataclasses', 'datetime', 'numpy',
+            'matching_engine', 'order_book', 'orders', 'synthetic_scenarios',
+            'doctest', 'python_ta'
         ],
-        'disable': [
-            'too-many-instance-attributes',
-            'naming-convention-violation',
-            'E9998'
+        'allowed-io': [
+            'load_csv',
+            '_load_internal_csv',
+            '_load_lobster_messages',
+            'export_training_csv',
+            '_load_lobster_orderbook'
         ],
+        'disable': ['E9998'],
         'max-line-length': 120
     })

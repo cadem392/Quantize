@@ -1,11 +1,11 @@
 """Quantyze order and event data classes.
 
-This module contains the core data objects shared across the rest of the
-project:
-- Event, which represents a raw market instruction
-- BaseOrder, which stores the common executable-order fields
-- IncomingOrder, which represents a mutable order currently being matched
-- Order, which represents a limit order resting in the order book
+Module Description
+==================
+This module contains the shared market event and order data classes used across
+Quantyze. It defines Event for incoming instructions, BaseOrder for common
+executable-order fields, IncomingOrder for temporary matching-state objects,
+and Order for resting limit orders stored in the book.
 
 Copyright Information
 ===============================
@@ -14,9 +14,11 @@ Copyright (c) 2026 Cade McNelly, Nicolas Miranda Cantanhede,
 Sahand Samadirand
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 
 
+@dataclass
 class Event:
     """A raw market instruction that enters the trading system.
 
@@ -41,24 +43,6 @@ class Event:
     order_type: str
     price: float | None
     quantity: float
-
-    def __init__(self, timestamp: datetime, order_id: str, side: str, order_type: str,
-                 price: float | None, quantity: float) -> None:
-        """Initialize this event with the given order data.
-
-        Preconditions:
-        - side in {'buy', 'sell'}
-        - order_type in {'limit', 'market', 'cancel'}
-        - quantity >= 0
-        - order_type != 'limit' or price is not None
-        - order_type == 'limit' or price is None
-        """
-        self.timestamp = timestamp
-        self.order_id = order_id
-        self.side = side
-        self.order_type = order_type
-        self.price = price
-        self.quantity = quantity
 
     def validate(self) -> None:
         """Validate that this event satisfies the required order constraints.
@@ -164,6 +148,14 @@ class BaseOrder:
 
     def fill(self, qty: float) -> float:
         """Apply a fill to this order and reduce its remaining quantity.
+
+        >>> order = Order(Event(datetime(2026, 1, 1, 9, 30), 'o1', 'buy', 'limit', 100.0, 5.0))
+        >>> order.fill(2.0)
+        2.0
+        >>> order.remaining_qty
+        3.0
+        >>> order.is_complete()
+        False
 
         Preconditions:
         - qty >= 0
@@ -337,8 +329,7 @@ if __name__ == '__main__':
     doctest.testmod()
 
     python_ta.check_all(config={
-        'extra-imports': ['datetime', 'doctest', 'python_ta'],
+        'extra-imports': ['dataclasses', 'datetime', 'doctest', 'python_ta'],
         'allowed-io': [],
-        'disable': ['too-many-arguments'],
         'max-line-length': 120
     })

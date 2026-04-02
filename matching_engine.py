@@ -1,22 +1,12 @@
-"""
-Quantyze matching engine
+"""Quantyze matching engine.
 
 Module Description
 ==================
 This module contains the matching engine used to process incoming market events
-against the live order book for Quantyze. It applies price-time priority by matching
-better prices first then enforcing FIFO order withing each level.
-
-The matching engine is responsible for:
-- routing income events to the correct processing logic
-- matching limit and market orders against the opposite side of the book
-- handling cancellations
-- producing fill records and execution logs
-- updating running execution metrics
-
-This module is responsible only for the matching and execution logic. It does not
-implement the BST structure itself, dataset parsing or visualization.
-
+against the live order book for Quantyze. It applies price-time priority by
+matching better prices first and then enforcing FIFO order within each price
+level. The engine also records fills, cancellations, and execution metrics
+during replay.
 
 Copyright Information
 ===============================
@@ -35,8 +25,7 @@ from price_level import PriceLevel
 
 @dataclass
 class MatchingEngine:
-    """
-    Process events against the live OrderBook
+    """Process events against the live order book.
 
     Instance Attributes:
     - book: the shared live order book used for matching
@@ -68,7 +57,23 @@ class MatchingEngine:
         self.execution_log = []
 
     def process_event(self, event: Event) -> list[dict]:
-        """Process <event> and return the fill records produced."""
+        """Process <event> and return the fill records produced.
+
+        >>> from datetime import datetime
+        >>> book = OrderBook()
+        >>> engine = MatchingEngine(book)
+        >>> engine.process_event(Event(datetime(2026, 1, 1, 9, 30), 'ask1', 'sell', 'limit', 100.0, 2.0))
+        []
+        >>> fills = engine.process_event(
+        ...     Event(datetime(2026, 1, 1, 9, 30, 1), 'buy1', 'buy', 'limit', 100.0, 1.0)
+        ... )
+        >>> fills[0]['exec_price']
+        100.0
+        >>> fills[0]['filled_qty']
+        1.0
+        >>> book.best_ask().volume
+        1.0
+        """
 
         if event.order_type == "limit":
             return self._process_limit(event)
@@ -257,7 +262,22 @@ class MatchingEngine:
             best_ask = self.book.best_ask()
 
     def compute_metrics(self) -> dict:
-        """Return the aggregate execution metrics for this engine."""
+        """Return the aggregate execution metrics for this engine.
+
+        >>> from datetime import datetime
+        >>> book = OrderBook()
+        >>> engine = MatchingEngine(book)
+        >>> engine.process_event(Event(datetime(2026, 1, 1, 9, 30), 'ask1', 'sell', 'limit', 100.0, 2.0))
+        []
+        >>> _ = engine.process_event(
+        ...     Event(datetime(2026, 1, 1, 9, 30, 1), 'buy1', 'buy', 'limit', 100.0, 1.0)
+        ... )
+        >>> metrics = engine.compute_metrics()
+        >>> (metrics['total_filled'], metrics['fill_count'], metrics['cancel_count'])
+        (1.0, 1, 0)
+        >>> metrics['average_slippage']
+        0.0
+        """
 
         metrics_copy = self.metrics.copy()
 
