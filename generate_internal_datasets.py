@@ -18,7 +18,6 @@ Sahand Samadirand
 from __future__ import annotations
 
 import csv
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -33,14 +32,11 @@ HUGE_BLOCK_COUNT = 120
 
 
 def _new_event(
-    offset_seconds: int,
-    order_id: str,
-    side: str,
-    order_type: str,
-    price: float | None,
-    quantity: float
+        offset_seconds: int,
+        event_fields: tuple[str, str, str, float | None, float]
 ) -> Event:
     """Return one validated internal dataset event."""
+    order_id, side, order_type, price, quantity = event_fields
     event = Event(
         INTERNAL_DATASET_START + timedelta(seconds=offset_seconds),
         order_id,
@@ -67,12 +63,12 @@ def generate_sample_events() -> list[Event]:
     'rest_ask_119'
     """
     events = [
-        _new_event(0, "seed_bid_0", "buy", "limit", 99.9, 12.0),
-        _new_event(1, "seed_ask_0", "sell", "limit", 100.1, 12.0),
-        _new_event(2, "seed_bid_1", "buy", "limit", 99.8, 10.0),
-        _new_event(3, "seed_ask_1", "sell", "limit", 100.2, 10.0),
-        _new_event(4, "seed_bid_2", "buy", "limit", 99.7, 8.0),
-        _new_event(5, "seed_ask_2", "sell", "limit", 100.3, 8.0),
+        _new_event(0, ("seed_bid_0", "buy", "limit", 99.9, 12.0)),
+        _new_event(1, ("seed_ask_0", "sell", "limit", 100.1, 12.0)),
+        _new_event(2, ("seed_bid_1", "buy", "limit", 99.8, 10.0)),
+        _new_event(3, ("seed_ask_1", "sell", "limit", 100.2, 10.0)),
+        _new_event(4, ("seed_bid_2", "buy", "limit", 99.7, 8.0)),
+        _new_event(5, ("seed_ask_2", "sell", "limit", 100.3, 8.0)),
     ]
 
     for event_index in range(6, SAMPLE_EVENT_COUNT):
@@ -91,13 +87,19 @@ def generate_sample_events() -> list[Event]:
         )
         prefix, side, order_type, price, quantity, order_number = actions[cycle_step]
         events.append(
-            _new_event(event_index, f"{prefix}_{order_number}", side, order_type, price, quantity)
+            _new_event(
+                event_index,
+                (f"{prefix}_{order_number}", side, order_type, price, quantity)
+            )
         )
 
     return events
 
 
-def generate_huge_events(sample_events: list[Event], block_count: int = HUGE_BLOCK_COUNT) -> list[Event]:
+def generate_huge_events(
+        sample_events: list[Event],
+        block_count: int = HUGE_BLOCK_COUNT
+) -> list[Event]:
     """Return the repeated packaged large internal dataset.
 
     >>> sample_events = generate_sample_events()
@@ -112,7 +114,8 @@ def generate_huge_events(sample_events: list[Event], block_count: int = HUGE_BLO
     if not sample_events:
         return []
 
-    stride_seconds = (sample_events[-1].timestamp - sample_events[0].timestamp).seconds + BLOCK_GAP_SECONDS
+    time_span = sample_events[-1].timestamp - sample_events[0].timestamp
+    stride_seconds = time_span.seconds + BLOCK_GAP_SECONDS
     repeated_events = []
     for block_index in range(block_count):
         block_offset = timedelta(seconds=block_index * stride_seconds)
@@ -147,8 +150,8 @@ def write_events_csv(path: str, events: list[Event], line_terminator: str = "\n"
 
 
 def generate_internal_datasets(
-    sample_path: str = SAMPLE_DATASET_PATH,
-    huge_path: str = HUGE_DATASET_PATH
+        sample_path: str = SAMPLE_DATASET_PATH,
+        huge_path: str = HUGE_DATASET_PATH
 ) -> tuple[int, int]:
     """Generate the packaged internal CSV pair and return their event counts."""
     sample_events = generate_sample_events()
@@ -158,24 +161,18 @@ def generate_internal_datasets(
     return len(sample_events), len(huge_events)
 
 
-def main() -> None:
-    """Generate the packaged internal CSV files in the current working directory."""
+if __name__ == "__main__":
+    import doctest
+    import python_ta
+
+    doctest.testmod()
+
     sample_count, huge_count = generate_internal_datasets()
     print(f"Wrote {sample_count} events to {Path(SAMPLE_DATASET_PATH).resolve()}")
     print(f"Wrote {huge_count} events to {Path(HUGE_DATASET_PATH).resolve()}")
 
-
-if __name__ == "__main__":
-    if os.environ.get("QUANTYZE_RUN_PYTA") == "1":
-        import doctest
-        import python_ta
-
-        doctest.testmod()
-
-        python_ta.check_all(config={
-            "extra-imports": ["csv", "os", "datetime", "pathlib", "orders", "doctest", "python_ta"],
-            "allowed-io": ["write_events_csv", "main"],
-            "max-line-length": 100
-        })
-    else:
-        main()
+    python_ta.check_all(config={
+        "extra-imports": ["csv", "datetime", "pathlib", "orders", "doctest", "python_ta"],
+        "allowed-io": ["write_events_csv", "main"],
+        "max-line-length": 100
+    })

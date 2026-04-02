@@ -63,7 +63,7 @@ ideas that motivated this project. It is also a very natural place to apply
 CSC111 ideas such as tree-based data structures, simulation, and algorithmic
 state updates. Quantyze studies that gap by simulating a limit order book in
 Python.\footnote{Cont and de Larrard (2013) model price dynamics directly from
-the evolving bid and ask queues, which matches our focus on how local book
+the evolving bid and ask queues, which matches our focus very nicely
 state and order flow jointly shape execution outcomes:
 \url{https://arxiv.org/abs/1104.4596}} We represent bids and asks as separate binary search trees of
 price levels, maintain FIFO priority within each level, replay event streams
@@ -80,19 +80,14 @@ as buy, sell, or hold from order-book state.}
 The project kept the same core direction as our proposal, but the final version
 organizes the submission around a browser display launched from
 \texttt{main.py}, with a terminal-menu option for the same simulator and
-training logic. That let us present the project in a PyCharm-friendly way without
-changing the main computational challenge, which was to represent and update a live
-order book efficiently with trees while connecting the simulator to
-meaningful data and model-training. In the language of our original
+training logic. In the language of our original
 proposal, we still see the project as an attempt to close the gap between what
 a trader sees on a chart and what actually has to happen for an order to be
 filled.
 
 \section*{2. Datasets}
-One thing that became much clearer while building the final project is that not
-all data in Quantyze plays the same role. Quantyze uses three distinct
-\textbf{data-source roles}, and separating them clearly makes the rest of the
-system much easier to follow:
+Not all data in Quantyze plays the same role. It uses three distinct
+\textbf{data-source roles}, as described below:
 \begin{itemize}
     \item \textbf{synthetic scenarios} for simulator-first replay demos
     \item \textbf{packaged internal CSVs} for fast and reproducible classifier
@@ -100,11 +95,6 @@ system much easier to follow:
     \item \textbf{paired raw LOBSTER files} for the real-data preprocessing and
     feature-building path
 \end{itemize}
-
-The submission also includes a packaged dataset zip, so the TA does not need to
-download datasets or baseline model artifacts externally before running the
-project. That was important to us because we wanted the grading path to be
-packaged, local, and easy to repeat.
 
 \subsection*{2.1 Synthetic Event Data}
 We generated our own synthetic event streams for testing and demonstration.
@@ -140,20 +130,13 @@ preserved as annotations rather than replayed directly.
 
 From the paired order-book file, our current feature pipeline uses only the top
 two bid levels and top two ask levels, even when a file contains deeper book
-data. In practice, the model ultimately trains on level-1 and level-2
-price/size information rather than the full book.
+data. In practice, most of the meaningful data comes from these two levels, and so that's why we chose to use that approach.
 
 During development, we used public LOBSTER sample files such as AAPL, AMZN, and
 GOOG to validate the real-data pipeline. In the final submission, we ship one
-official Apple 5-level sample pair inside the dataset zip using the clearer
-extracted filenames:
-\begin{itemize}
-    \item \texttt{aapl\_lobster\_2012-06-21\_message\_5level\_sample.csv}
-    \item \texttt{aapl\_lobster\_2012-06-21\_orderbook\_5level\_sample.csv}
-\end{itemize}
-
+official Apple 5-level sample pair inside the dataset zip.
 This packaged LOBSTER option is \textbf{optional}. It demonstrates the
-real-data pipeline, but it is much larger and slower to load than the short
+real-data integration in our project, but it is much larger and slower to load than the short
 internal packaged dataset.
 
 \subsection*{2.3 Submission Dataset Package}
@@ -170,13 +153,15 @@ contains:
 \end{itemize}
 
 After extraction, these files are expected to sit beside \texttt{main.py}. Both
-the browser UI and the terminal menu look for the packaged datasets and
-shipped baseline artifacts there.
+the browser UI and the terminal menu look for the packaged datasets saved artifacts there.
 
 The two packaged internal CSVs, \texttt{sample\_internal.csv} and
 \texttt{huge\_internal.csv}, are local datasets prepared by our group in the
-project's canonical event format so the TA can run fast, reproducible
+project's event format so the TA can run smooth
 retraining without extra preprocessing.
+The repository also includes \texttt{generate\_internal\_datasets.py}, which
+reproduces those two packaged internal CSVs exactly; this is an optional
+provenance check and is not required for the main grading workflow.
 
 The intended roles of these packaged files are:
 \begin{itemize}
@@ -190,12 +175,11 @@ The intended roles of these packaged files are:
 \end{itemize}
 
 The package also includes saved metrics and a baseline checkpoint, so the TA
-can use the model path without retraining first.
+can use the model path in simulation without retraining.
 
-The packaged datasets and baseline artifacts are local, but the
+Please note that the packaged datasets and baseline artifacts are local, but the
 \texttt{Charts} tab loads \texttt{Chart.js} from a standard CDN, so the
-intended TA path assumes a normal internet connection, with the terminal menu
-remaining the documented backup method.
+intended TA path assumes a normal internet connection for the complete UI, with the terminal menu serving a backup option if needed.
 
 \section*{3. Computational Overview}
 \subsection*{3.1 Core Data Representation}
@@ -220,7 +204,7 @@ efficient best-bid and best-ask access. The FIFO queue inside each price level
 enforces time priority among orders resting at the same price. The queue is
 implemented as a doubly-linked list with a parallel \texttt{order\_id}-to-node
 dictionary, which gives O(1) cancellation by order id in addition to O(1)
-enqueue and dequeue. This combination directly models price-time-priority
+enqueue and dequeue. This combination helped us model price-time-priority
 matching, which was the main algorithmic goal of our project.\footnote{Gould
 et al.\ (2013) provide a comprehensive treatment of price-time priority and
 order-book microstructure dynamics:
@@ -237,33 +221,36 @@ order-book microstructure dynamics:
     bid/.style={level, fill=blue!15},
     ask/.style={level, fill=red!12},
     root/.style={level, fill=gray!20, minimum width=2.2cm},
-    queue/.style={draw, rectangle, minimum width=0.9cm,
-                  minimum height=0.42cm, font=\scriptsize, fill=yellow!25},
     arr/.style={-{Stealth[length=4pt]}, thin},
 ]
 \node[root] (ob) {OrderBook};
-\node[bid, below left=0.9cm and 2.0cm of ob]  (bid_root) {100.0 bid};
-\node[bid, below left=0.5cm and 0.7cm of bid_root]  (bid_l) {99.8 bid};
-\node[bid, below right=0.5cm and 0.7cm of bid_root] (bid_r) {99.5 bid};
-\node[ask, below right=0.9cm and 2.0cm of ob] (ask_root) {100.2 ask};
-\node[ask, below left=0.5cm and 0.7cm of ask_root]  (ask_l) {100.4 ask};
+
+% Bid tree: valid BST
+\node[bid, below left=0.9cm and 2.0cm of ob]  (bid_root) {99.8 bid};
+\node[bid, below left=0.5cm and 0.7cm of bid_root]  (bid_l) {99.5 bid};
+\node[bid, below right=0.5cm and 0.7cm of bid_root] (bid_r) {100.0 bid};
+
+% Ask tree: valid BST
+\node[ask, below right=0.9cm and 2.0cm of ob] (ask_root) {100.4 ask};
+\node[ask, below left=0.5cm and 0.7cm of ask_root]  (ask_l) {100.2 ask};
 \node[ask, below right=0.5cm and 0.7cm of ask_root] (ask_r) {100.6 ask};
+
 \draw[arr] (ob.south west) -- (bid_root.north);
 \draw[arr] (ob.south east) -- (ask_root.north);
 \draw[arr] (bid_root.south west) -- (bid_l.north);
 \draw[arr] (bid_root.south east) -- (bid_r.north);
 \draw[arr] (ask_root.south west) -- (ask_l.north);
 \draw[arr] (ask_root.south east) -- (ask_r.north);
-\node[above=0.05cm of bid_root, font=\scriptsize\itshape, text=blue!60] {best bid = max};
-\node[above=0.05cm of ask_root, font=\scriptsize\itshape, text=red!60]  {best ask = min};
+
+\node[above=0.05cm of bid_r, font=\scriptsize\itshape, text=blue!60] {best bid = max};
+\node[above=0.05cm of ask_l, font=\scriptsize\itshape, text=red!60]  {best ask = min};
 \end{tikzpicture}
 \caption{The \texttt{OrderBook} holds two \texttt{BookTree} instances. The bid
 tree's maximum-price node is the best bid; the ask tree's minimum-price node is
-the best ask. Each \texttt{PriceLevel} node holds a FIFO doubly-linked-list
-queue of resting orders that enforces
-time priority.}
+the best ask.}
 \label{fig:order-book}
 \end{figure}
+
 
 \subsection*{3.2 Event Replay and Matching}
 All incoming data is converted into a common \texttt{Event} representation in
@@ -291,14 +278,14 @@ At the end of a normal run, the simulation runtime reports:
     \item agent overlay mark-to-market P\&L if a trained checkpoint is active
 \end{itemize}
 
-The same simulation and training state is surfaced in two ways:
+The same simulation and training state is processed in two ways:
 \begin{itemize}
     \item the browser UI launched by \texttt{main.py}
     \item the optional terminal menu opened through
     \texttt{main(run\_ui=False)}
 \end{itemize}
 
-The saved artifacts that support those workflows include:
+The saved artifacts include:
 \begin{itemize}
     \item \texttt{model.pt}
     \item \texttt{training\_metrics.json}
@@ -311,10 +298,10 @@ The saved artifacts that support those workflows include:
 
 The packaged baseline artifacts are \texttt{model.pt} and
 \texttt{training\_metrics.json}. The remaining files are created or updated as
-the TA simulates, retrains, changes overlay mode, or inspects the latest
+you simulate, retrain, change overlay mode, or inspect the latest
 execution log.
 
-\subsection*{3.3 Data Processing and Training Pipeline}
+\subsection*{3.3 Data Processing and Training}
 
 \begin{figure}[H]
 \centering
@@ -331,7 +318,7 @@ execution log.
 \node[box, right=1.1cm of engine]  (book)   {OrderBook};
 \node[box, below=0.8cm of book]    (feat)   {12 base features};
 \node[box, below=0.5cm of feat]    (aug)    {+4 delta features};
-\node[box, below=0.5cm of aug]     (label)  {horizon label};
+\node[box, below=0.5cm of aug]     (label)  {short term label};
 \node[box, left=1.1cm of label]    (net)    {OrderBookNet};
 \node[box, left=1.1cm of net]      (ckpt)   {checkpoint (.pt)};
 \draw[arr] (events)  -- node[above, lab]{replay} (engine);
@@ -343,8 +330,7 @@ execution log.
 \draw[arr] (net)     -- node[below, lab]{\texttt{save()}} (ckpt);
 \end{tikzpicture}
 \caption{This is how the training data flows: events are replayed through the matching engine to
-keep the \texttt{OrderBook} live. At each step, a 16-D feature vector (12
-instantaneous book-state features plus 4 one-step deltas) and a horizon-based
+keep the \texttt{OrderBook} live. At each step, a 16-D feature vector  and a short term
 label are extracted. \texttt{OrderBookNet} is trained with class-weighted
 cross-entropy and the best-validation-loss state is saved as a checkpoint.}
 \label{fig:pipeline}
@@ -381,7 +367,7 @@ The remaining 4 are one-step history-delta features appended by
     \item one-step imbalance delta
 \end{enumerate}
 
-The label policy is \textbf{horizon-based}. For each example, we compare
+The label policy is \textbf{short-term based}. For each example, we compare
 the current midpoint to the midpoint 50 events later:
 \begin{itemize}
     \item if the future midpoint is higher by more than the threshold, the
@@ -391,11 +377,10 @@ the current midpoint to the midpoint 50 events later:
     \item otherwise the label is \texttt{hold}
 \end{itemize}
 
-This pipeline is implemented in \texttt{DataLoader.build\_training\_dataset} and
-related helper methods. The final training flow in \texttt{training.py}
+This idea is implemented in \texttt{DataLoader.build\_training\_dataset} and
+related helper methods. The final training run in \texttt{training.py}
 computes train/validation splits, standardizes features with training-set mean
-and standard deviation, applies class-weighted cross-entropy, trains a PyTorch
-feed-forward network, and saves the latest training artifacts:
+and standard deviation, applies class-weighted cross-entropy, trains a PyTorch network, and saves the latest training artifacts:
 \begin{itemize}
     \item \texttt{latest\_model.pt}
     \item \texttt{latest\_training\_metrics.json}
@@ -408,8 +393,7 @@ checkpoint.
 
 \subsection*{3.4 User Interactivity}
 The TA-facing interface is a browser UI launched by \texttt{main.py} and
-served by \texttt{web.py}. Running \texttt{main.py} in PyCharm, or running
-\texttt{python3 main.py}, starts the browser workflow at
+served by \texttt{web.py}. Running \texttt{main.py} in PyCharm starts the browser workflow at
 \texttt{http://127.0.0.1:9000}. The browser UI has four tabs:
 \begin{itemize}
     \item \texttt{Simulate}
@@ -425,15 +409,10 @@ packaged internal datasets, the packaged LOBSTER message-file path, or a custom
 CSV path. \texttt{Artifacts} reports the active overlay state, saved
 checkpoints, metrics files, and latest training outputs. \texttt{Charts}
 renders order-book depth and execution-price history after a simulation. The
-backup terminal path uses \texttt{terminal\_menu.py}, but the intended TA
-workflow is the browser UI.
+backup terminal path uses \texttt{terminal\_menu.py}, but the desired path is the browser UI for better interactivity and visualization of the charts.
 
 The active overlay choice is stored in \texttt{active\_model.json}, which
-makes the browser workflow persistent across runs. For submission readiness, we
-split the orchestration code into \texttt{config.py}, \texttt{simulation.py},
-\texttt{training.py}, \texttt{api\_payloads.py}, \texttt{web.py}, and
-\texttt{terminal\_menu.py}, while keeping \texttt{main.py} as a small entry
-point.
+makes the browser run persistently across runs.
 
 \begin{figure}[H]
 \centering
@@ -567,6 +546,10 @@ running \texttt{main.py} and opening the printed local URL:
     \item Re-run \texttt{balanced} under a different overlay to isolate the
     difference between \textit{market replay} and \textit{agent overlay}
     behavior.
+    \item Optional reproducibility check: run
+    \texttt{generate\_internal\_datasets.py} to regenerate
+    \texttt{sample\_internal.csv} and \texttt{huge\_internal.csv}. This is a
+    short helper script only; the intended TA path still uses the packaged zip.
 \end{enumerate}
 
 \begin{figure}[H]
