@@ -159,9 +159,8 @@ The two packaged internal CSVs, \texttt{sample\_internal.csv} and
 \texttt{huge\_internal.csv}, are local datasets prepared by our group in the
 project's event format so the TA can run smooth
 retraining without extra preprocessing.
-The repository also includes \texttt{generate\_internal\_datasets.py}, which
-reproduces those two packaged internal CSVs exactly; this is an optional
-provenance check and is not required for the main grading workflow.
+The submission also includes \texttt{generate\_internal\_datasets.py}, which
+reproduces those two packaged internal CSVs exactly; (not required for the main run)
 
 The intended roles of these packaged files are:
 \begin{itemize}
@@ -437,8 +436,8 @@ highlighted by the project rubric.
 
 \begin{itemize}
     \item \textbf{Non-trivial dataset processing and model training:} the system
-    supports multiple input formats, infers paired LOBSTER order-book files,
-    separates replay-compatible and non-replayable events, builds a shared
+    supports multiple input formats, patches LOBSTER order-book files,
+    separates replayable and non-replayable events, builds a shared
     training dataset, normalizes features, computes class weights, and saves
     checkpoints and metric artifacts.
     \item \textbf{Non-trivial algorithms implemented by us:} the BST-based order
@@ -446,13 +445,12 @@ highlighted by the project rubric.
     cancellation/indexing logic are all custom project code rather than thin
     wrappers around third-party libraries.
     \item \textbf{Non-trivial reporting and interactivity:} the browser UI,
-    terminal menu, saved-state workflow, metrics inspection, and
-    execution-log reporting make the program substantially more interactive
-    than a single fixed command.
+    terminal menu option, saved-state artifacts and metrics, and
+    execution-log reporting make the program very interactive.
 \end{itemize}
 
 \section*{4. Instructions for Obtaining Datasets and Running the Program}
-The TA-facing run path is a single browser-first workflow. The most important
+As described before, the main workflow is the browser UI, with an additional terminal menu option. The most important
 distinction is that \textbf{simulation source} and \textbf{model source} are
 separate:
 \begin{itemize}
@@ -464,7 +462,7 @@ separate:
     a newly trained \texttt{latest\_model.pt}
 \end{itemize}
 
-Keeping them separate lets the TA test the same classifier overlay under
+Keeping them separate allows testing the same classifier overlay under
 different market conditions and retrain a model without overwriting the shipped
 baseline artifacts. We found this distinction important because the simulator
 is the core system, while the model is an optional layer on top of it.
@@ -487,11 +485,11 @@ project should see:
     \item \texttt{training\_metrics.json}
 \end{itemize}
 
-The shortest TA path should start with \texttt{sample\_internal.csv}. The
-larger internal dataset and the packaged LOBSTER pair are both slower-loading
-options for a more thorough optional check.
+The shortest path is using \texttt{sample\_internal.csv}. The
+larger internal dataset and the packaged LOBSTER pair are both slower
+options, but also working options.
 
-As the TA trains or changes overlay state, the runtime may also create or
+As the TA trains or changes overlay state, the program may also create or
 update:
 \begin{itemize}
     \item \texttt{latest\_model.pt}
@@ -502,7 +500,6 @@ update:
 \end{itemize}
 
 \subsection*{4.3 Workflow Overview}
-The primary grading path is:
 \begin{enumerate}
     \item extract \texttt{quantyze\_datasets.zip} beside \texttt{main.py}
     \item open the project in PyCharm
@@ -527,12 +524,12 @@ running \texttt{main.py} and opening the printed local URL:
     \item Start on the \texttt{Simulate} tab and run the default
     \texttt{balanced} scenario. This is the fastest simulator-first path and
     produces the same summary metrics described later in this section.
-    \item On the same tab, optionally run \texttt{low\_liquidity} and
+    \item On the same tab, you can run \texttt{low\_liquidity} and
     \texttt{high\_volatility}. These scenarios show that the same overlay can
     be evaluated under different event streams without changing the core
     matching engine.
     \item Open \texttt{Train}. For a short demonstration, use
-    \texttt{sample\_internal.csv}. For a baseline-scale demonstration, use
+    \texttt{sample\_internal.csv}. For a larger demonstration, use
     \texttt{huge\_internal.csv}. \\
     For the real-data path, use
     \texttt{aapl\_lobster\_2012-06-21\_message\_5level\_sample.csv}. The
@@ -542,14 +539,12 @@ running \texttt{main.py} and opening the printed local URL:
     \item Open \texttt{Artifacts}. Check the overlay status, saved files, and
     baseline versus latest metrics.
     \item Open \texttt{Charts} after a simulation. This shows order-book depth
-    and execution-price history based on the replay that just ran.
+    and execution-price history based on the replay that just ran. It changes for different datasets, events streams, etc. So if you want check out the different charts!
     \item Re-run \texttt{balanced} under a different overlay to isolate the
-    difference between \textit{market replay} and \textit{agent overlay}
-    behavior.
-    \item Optional reproducibility check: run
-    \texttt{generate\_internal\_datasets.py} to regenerate
-    \texttt{sample\_internal.csv} and \texttt{huge\_internal.csv}. This is a
-    short helper script only; the intended TA path still uses the packaged zip.
+    difference between market replay and agent overlay behaviour.
+    \item Optional data generation check: run
+    \texttt{generate\_internal\_datasets.py} to regenerate \\
+    \texttt{sample\_internal.csv} and \texttt{huge\_internal.csv}.
 \end{enumerate}
 
 \begin{figure}[H]
@@ -581,13 +576,12 @@ Before each run, the program prints:
     \item the \textbf{simulation overlay mode}, such as \texttt{baseline},
     \texttt{latest}, or \texttt{none}
     \item the \textbf{simulation overlay path}
-    \item the \textbf{overlay provenance}, such as the packaged baseline
+    \item the \textbf{overlay used}, such as the packaged baseline
     checkpoint or a newly trained dataset like \texttt{sample\_internal.csv}
 \end{itemize}
 
-This header tells the TA which market is being replayed and which classifier
-overlay, if any, is observing it. They are related, but they are not the same
-thing.
+This tells which market is being replayed and which classifier
+overlay, if any, is observing it. They are related, but they are not the same thing!
 
 \subsubsection*{Matching-Engine Metrics}
 The following summary values describe the replay itself:
@@ -655,7 +649,7 @@ infers the paired order-book path by replacing \texttt{\_message\_} with
 
 \section*{5. Changes from Proposal to Final Submission}
 The final project is cleaner and narrower than the proposal. The simulator
-remained the core deliverable, and the ML component stayed as an optional
+remained the core implementation, and the ML component stayed as an
 overlay rather than becoming the center of the project.
 
 On the implementation side, we ended with a clearer module split than we
@@ -666,9 +660,9 @@ serialization, \texttt{web.py} serves the browser UI,
 \texttt{terminal\_menu.py} owns the backup terminal flow, and \texttt{main.py}
 is now a small entry point.
 
-Our frontend plan also changed. The proposal left room for a heavier
-React/Plotly-style interface, but the final submission uses a lightweight
-Flask/browser UI instead. That choice kept the focus on the tree-based order
+Our frontend plan also changed. We decided to move away from the
+React/Plotly-style interface, and use a
+Flask/browser UI instead. That choice let us focus on the tree-based order
 book, matching engine, and training pipeline while still giving the TA a clear
 PyCharm-friendly workflow.
 
@@ -680,74 +674,55 @@ for the real-data preprocessing path.
 \section*{6. Discussion}
 Our goal was to model the mechanics of a limit order book using trees and to
 connect that simulator to a simple market-action classifier. The final project
-does meet that goal, though the machine learning side is more modest than the
-simulator itself.
+does meet that goal.
 
 On the simulation side, the output is meaningful and easy to interpret. In the
 current default \texttt{balanced} run, the simulator reports 1748.00 total
 filled volume, 374 fills, 128 cancellations, a final spread of 0.60, and a
 final midpoint of 100.00. Those values show that the event sequence
-is not just inserting passive orders forever; it is generating executions,
+is properly generating executions,
 consuming liquidity, and rebuilding the book over time. That mattered to us
 from the beginning, because one of the main motivations for the project was to
-show the difference between a quoted market price and the mechanics required to
-fill an order.
+show the difference between a quoted market price and the mechanics to actually process the order.
 
-We also think the project succeeds as a data-structures project. The binary
-search trees are not decorative. They are the central representation of the
-market. Maintaining sorted price levels, extracting the best bid and best ask,
-removing empty levels, and preserving FIFO priority within a level all fit the
-tree-based design naturally. That gives the project real computational
-substance beyond simple data loading or basic statistics.
+We also think the project succeeds as a data-structures project. The binary search trees are the central representation of the
+market. They are intrinsic to maintain sorted price levels, extract the best bid and best ask,
+remove empty levels, and preserve FIFO priority within a level all fit the
+tree-based design naturally. Furthermore, their specific structure makes the program run more efficiently, as we learned in class!
 
 The machine learning component works, but it needs to be interpreted carefully.
 The packaged baseline checkpoint and its accompanying metrics artifact now show
 a validation accuracy of approximately 0.81644 compared to a majority-class
 baseline of approximately 0.66184 on \texttt{huge\_internal.csv}. These values
-are useful for confirming that the training pipeline, checkpoint loader, and
-saved-state workflow function correctly, but they are still tied to a packaged
-internal dataset rather than a difficult real-market benchmark.
-
-The run-time P\&L shown in the simulator should also be read as an agent
-overlay metric rather than as proof of profitability. The neural network is
-trained on future midpoint labels, not on a direct trading reward, and the
-simulation overlay uses those labels to build a simple paper position over
-time. Because of that, the classifier can behave as designed while still
-producing a negative mark-to-market value in a thin or volatile synthetic
-scenario.
+are useful for confirming that the training model works correctly, but they are still tied to a packaged
+internal dataset rather than complex real-market circumnstances.
 
 When we tested on public LOBSTER sample data during development, the task was
 much harder and performance was only modestly above a naive baseline. For that
 reason, we do not present the current model as a strong predictive system for
 real markets. In this project, its role is better understood as a small
-proof of concept that connects book-state features to model output inside a
-complete simulator.
+proof of concept that we are able to connect limit order books to a machine learning model.
 
 That still answers the project goal in a meaningful way. The goal was never
 just to maximize predictive accuracy. It was to build a full computational
 pipeline from market events to order-book state to derived features to model
-output. In that sense, the ML side is successful: it uses both synthetic and
-real-data paths, produces saved checkpoints, supports inference inside the
-simulator, and can be retrained from the browser UI or the terminal menu.
+output. In that sense, we consider the ML side to be successful.
 
-We also ran into clear limitations. Synthetic data is easy to test and reason
-about, but it is not enough to justify a strong predictive claim. Real LOBSTER
+We also ran into clear limitations. Synthetic data is easy to test and but is not enough to justify a strong predictive claim. Real LOBSTER
 data is much richer, but it brings preprocessing issues, class-balance issues,
-and a harder learning problem. The model itself is also simple: we used a small
-feed-forward network over handcrafted features rather than a stronger temporal
-model. That was a reasonable CSC111 choice, but it limits what the model can
+and a harder learning problem. The model itself is a small Pytorch feed-foward neural network, which we found reasonable for the scope of this project and the course., but it limits what the model can
 learn about market dynamics. Finally, our presentation scope narrowed over the
-course of the project. The proposal imagined a more polished UI layer, but most
-of our time went into the simulation engine, dataset handling, and ML pipeline.
+course of the project. We planned to integrate a more polished UI layer, but most
+of our time went into the simulation engine, dataset handling, and the training side
 
 If we were to continue the project, the next steps would be to improve the
 visualization layer, add a stronger sequence-aware model, and evaluate the
 trained agent with more realistic trading metrics across multiple market days.
-Even with those limitations, we think the current submission succeeds as a
-CSC111 project because it combines tree-based design, non-trivial event
-processing, model training, and interpretable output in one coherent system.
+Even with those limitations, we think the program is very successful as it combines a tree-based architecture with simulation, event processing and model training.
 More importantly, it still reflects the original motivation behind the project:
-to make the hidden mechanics of a market feel concrete rather than abstract.
+to show the hidden mechanics of a financial market. \\
+
+We hope you enjoyed the project as much as we did!
 
 \section*{7. References}
 \begin{enumerate}
